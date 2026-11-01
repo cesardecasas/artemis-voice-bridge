@@ -93,6 +93,15 @@ export function showToolEnd(id, ok, summary) {
   );
 }
 
+/** New conversation: settle open cards locally and empty the activity panel. */
+export function clearActivity() {
+  for (const settle of Array.from(openApprovals.values())) {
+    settle(false, "✕ Cancelled");
+  }
+  runningTools.clear();
+  document.getElementById("activity")?.replaceChildren();
+}
+
 /** Mark every running tool as cut off (interrupt / disconnect). */
 export function abandonTools() {
   for (const id of Array.from(runningTools.keys())) {

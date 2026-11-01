@@ -3,7 +3,7 @@ import { HANDSFREE_STORAGE_KEY, MUTED_STORAGE_KEY } from "./constants.js";
 import { state } from "./state.js";
 import { appendMessage, bindRecordClick, requireElement, setStatus, showMuted, updateRecordButton } from "./ui.js";
 import { startRecording, stopRecording } from "./recorder.js";
-import { connect, consumeTokenFromUrl, interrupt } from "./websocket.js";
+import { connect, consumeTokenFromUrl, interrupt, newConversation } from "./websocket.js";
 import { onPlaybackIdle, stopPlayback } from "./audio.js";
 import { notifyPlaybackIdle, setHandsFree } from "./handsfree.js";
 import { startHealthPolling } from "./health.js";
@@ -117,6 +117,10 @@ composer.addEventListener("submit", (event) => {
 
 state.muted = loadStored(MUTED_STORAGE_KEY) === "1";
 showMuted(state.muted);
+
+requireElement("new-chat-btn").addEventListener("click", () => {
+  newConversation();
+});
 
 requireElement("mute-btn").addEventListener("click", () => {
   state.muted = !state.muted;

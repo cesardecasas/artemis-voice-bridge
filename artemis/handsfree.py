@@ -51,6 +51,17 @@ MAX_QUEUED_SEGMENTS = 4
 
 # What Whisper "hears" in near-silence or noise. Only filtered when no wake word
 # was needed (follow-up window); "Artemis, thank you" still goes through.
+# "Artemis, new conversation", "start over", "let's start fresh"...
+_NEW_CONVERSATION = re.compile(
+    r"^(?:(?:ok(?:ay)?|hey|please|let'?s|can we|could we|can you|could you)\W+)*"
+    r"(?:start\W+(?:a\W+)?(?:new|fresh)\W+(?:conversation|chat|session|topic)"
+    r"|(?:a\W+)?new\W+(?:conversation|chat|session|topic)"
+    r"|start\W+(?:over|fresh|from\W+scratch)|fresh\W+start"
+    r"|(?:reset|clear)\W+(?:the\W+|this\W+|our\W+)?(?:conversation|chat|session))"
+    r"(?:\W+(?:please|now|artemis))*\W*$",
+    re.IGNORECASE,
+)
+
 # "Artemis, thanks" ends the conversation like a stop (only with the wake word).
 _THANKS = re.compile(r"^(thanks?|thank you)(?:\W+\w+)?\W*$", re.IGNORECASE)
 
@@ -82,6 +93,7 @@ class HandsFreeHost(Protocol):
     async def resolve_approval_by_voice(self, approved: bool) -> None: ...
     async def start_voice_turn(self, text: str, stt_ms: int) -> None: ...
     async def interrupt_turn(self) -> None: ...
+    async def new_session(self) -> None: ...
 
 
 class HandsFree:
@@ -187,6 +199,11 @@ class HandsFree:
         command = wake.command if wake is not None else text
         if wake is None and _normalized(command) in _HALLUCINATIONS and segment.seconds < 2.0 and not busy:
             logger.debug("Ignored a likely Whisper hallucination in the follow-up window")
+            return
+        if _NEW_CONVERSATION.match(command):
+            logger.info("New conversation by voice")
+            await self._host.new_session()
+            await self._listen(self.config.listen_s, "new_session")  # ask right away, no wake word
             return
         if _STOP_COMMAND.match(command) or (wake is not None and _THANKS.match(command)):
             # Never a question for the agent, even if Artemis just went quiet.

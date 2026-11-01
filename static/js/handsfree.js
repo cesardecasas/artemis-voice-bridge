@@ -118,8 +118,8 @@ export async function setHandsFree(on) {
 export function onHandsFreeStatus(status, reason) {
   const before = state.handsFree;
   state.handsFree = status;
-  if (status === "listening" && before !== "listening" && reason === "wake") {
-    void chime("start"); // "Artemis." → I'm listening
+  if (status === "listening" && before !== "listening" && (reason === "wake" || reason === "new_session")) {
+    void chime("start"); // "Artemis." / "Artemis, new conversation" → I'm listening
   }
   renderCore();
 }

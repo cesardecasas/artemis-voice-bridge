@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from collections import OrderedDict
@@ -29,6 +30,9 @@ class Session:
         self.last_seen = time.time()
 
 
+_SESSION_ID = re.compile(r"^[0-9a-f]{32}$")
+
+
 class SessionStore:
     """Keeps the most recently used sessions; the oldest are dropped first."""
 
@@ -43,13 +47,20 @@ class SessionStore:
             session.last_seen = time.time()
             return session
 
-        session = Session(id=uuid.uuid4().hex)
+        # An id this process doesn't know (e.g. after a restart) is adopted rather
+        # than replaced: the agent (Hermes) keeps the conversation under that id.
+        known_format = session_id is not None and _SESSION_ID.match(session_id) is not None
+        session = Session(id=session_id if known_format and session_id else uuid.uuid4().hex)
         self._sessions[session.id] = session
 
         while len(self._sessions) > self._max:
             self._sessions.popitem(last=False)
 
         return session
+
+    def create(self) -> Session:
+        """Start a brand-new conversation."""
+        return self.get_or_create(None)
 
     def __len__(self) -> int:
         return len(self._sessions)

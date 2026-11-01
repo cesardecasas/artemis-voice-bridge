@@ -24,6 +24,7 @@ Source of truth: [`artemis/protocol.py`](../artemis/protocol.py) (Python `TypedD
 | `approval.response` | `id: string`, `approved: boolean` | Answer to an `agent.approval_request` |
 | `handsfree.start` | `format: "pcm16"`, `sample_rate: 16000` | Start hands-free: binary frames outside a recording are now little-endian PCM16 at 16 kHz (any frame size; the browser sends 100 ms). Fails with `handsfree_unavailable` if the VAD model is missing |
 | `handsfree.stop` | — | Stop hands-free |
+| `session.new` | — | Start a new conversation: cancels any turn, then the server sends a new `session` (and `state: idle`) |
 | `playback.idle` | — | Artemis's reply finished playing (not sent when it was interrupted). Opens the follow-up window |
 
 Malformed messages get `error` with code `bad_request`; the connection stays open.
@@ -32,7 +33,7 @@ Malformed messages get `error` with code `bad_request`; the connection stays ope
 
 | `type` | Fields | Meaning |
 |---|---|---|
-| `session` | `session_id`, `protocol` (=1), `agent` | Reply to `hello`. The client stores `session_id` |
+| `session` | `session_id`, `protocol` (=1), `agent` | Reply to `hello` or `session.new`. The client stores `session_id`; a different id than before means a new conversation (clear the HUD). An unknown but well-formed 32-hex id in `hello` is adopted, so conversations survive a server restart |
 | `state` | `value: idle \| listening \| transcribing \| thinking \| speaking` | Pipeline state. The UI is driven by this |
 | `transcript.final` | `text` | What the user said (or typed) |
 | `agent.token` | `text` | A streamed piece of the reply |

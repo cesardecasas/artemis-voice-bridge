@@ -25,11 +25,13 @@
 /** @typedef {{ type: "handsfree.stop" }} HandsFreeStopMessage */
 /** Artemis's reply finished playing (opens the follow-up window). */
 /** @typedef {{ type: "playback.idle" }} PlaybackIdleMessage */
+/** Start a new conversation; the server answers with a new `session`. */
+/** @typedef {{ type: "session.new" }} SessionNewMessage */
 
 /**
  * @typedef {HelloMessage | AudioStartMessage | AudioEndMessage | TextInputMessage
  *   | InterruptMessage | ApprovalResponseMessage | HandsFreeStartMessage | HandsFreeStopMessage
- *   | PlaybackIdleMessage} ClientMessage
+ *   | PlaybackIdleMessage | SessionNewMessage} ClientMessage
  */
 
 // ---------------------------------------------------------------- server -> client

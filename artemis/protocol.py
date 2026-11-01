@@ -94,6 +94,12 @@ class PlaybackIdleMessage(TypedDict):
     type: Literal["playback.idle"]
 
 
+class SessionNewMessage(TypedDict):
+    """Start a new conversation (fresh session; the old one stays in the agent)."""
+
+    type: Literal["session.new"]
+
+
 ClientMessage = (
     HelloMessage
     | AudioStartMessage
@@ -104,6 +110,7 @@ ClientMessage = (
     | HandsFreeStartMessage
     | HandsFreeStopMessage
     | PlaybackIdleMessage
+    | SessionNewMessage
 )
 
 
@@ -293,6 +300,9 @@ def parse_client_message(data: object) -> ClientMessage:
 
         case "playback.idle":
             return {"type": "playback.idle"}
+
+        case "session.new":
+            return {"type": "session.new"}
 
         case _:
             raise ProtocolError(f"Unknown message type {kind!r}")

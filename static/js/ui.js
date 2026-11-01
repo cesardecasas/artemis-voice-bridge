@@ -149,6 +149,8 @@ export function updateRecordButton() {
   button.disabled = state.isStopping || !state.connected;
   button.setAttribute("aria-label", active ? "Stop recording and send" : "Start recording");
   button.setAttribute("aria-pressed", active ? "true" : "false");
+  const newChat = /** @type {HTMLButtonElement | null} */ (document.getElementById("new-chat-btn"));
+  if (newChat) newChat.disabled = !state.connected || active;
   renderCore();
 }
 
@@ -232,6 +234,12 @@ export function showSession(sessionId) {
   if (label) {
     label.innerText = `session ${sessionId.slice(0, 4)}·${sessionId.slice(4, 8)} · local`;
   }
+}
+
+/** New conversation: empty the conversation panel. */
+export function clearConversation() {
+  ui.streamingReply = null;
+  document.getElementById("display")?.replaceChildren();
 }
 
 /** @param {boolean} muted */

@@ -179,6 +179,16 @@ button, input { font: inherit; color: inherit; }
 .side-head { display: flex; justify-content: space-between; align-items: center; }
 .side-head h2 { margin: 0; font-weight: 400; }
 .side-meta { font-family: var(--mono); font-size: 11px; color: var(--dusk); }
+.newchat-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 32px; padding: 4px 12px;
+  border-radius: 999px; border: 1px solid var(--line);
+  background: transparent; color: var(--dusk);
+  font: 12px var(--mono); letter-spacing: 0.04em; cursor: pointer;
+}
+.newchat-btn:hover:not(:disabled) { border-color: rgba(169, 180, 255, 0.55); color: var(--text); }
+.newchat-btn:focus-visible { outline: 2px solid var(--dusk); outline-offset: 2px; }
+.newchat-btn:disabled { opacity: 0.4; cursor: default; }
 
 .feed {
   display: flex;

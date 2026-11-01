@@ -268,14 +268,7 @@ class VoiceConnection:
                     return
                 self.authenticated = True
                 self.session = self.deps.sessions.get_or_create(message.get("session_id"))
-                await self.send(
-                    {
-                        "type": "session",
-                        "session_id": self.session.id,
-                        "protocol": PROTOCOL_VERSION,
-                        "agent": self.deps.agent.name,
-                    }
-                )
+                await self._send_session()
                 await self.send_state("idle")
 
             case "audio.start":
@@ -327,10 +320,35 @@ class VoiceConnection:
             case "handsfree.stop":
                 await self._stop_handsfree()
 
+            case "session.new":
+                await self.new_session()
+
             case "playback.idle":
                 self._client_playing = False
                 if self._handsfree is not None:
                     await self._handsfree.playback_finished()
+
+    async def _send_session(self) -> None:
+        assert self.session is not None
+        await self.send(
+            {
+                "type": "session",
+                "session_id": self.session.id,
+                "protocol": PROTOCOL_VERSION,
+                "agent": self.deps.agent.name,
+            }
+        )
+
+    async def new_session(self) -> None:
+        """Stop whatever is happening and start a fresh conversation."""
+        self._recording = None
+        self._client_playing = False
+        if await self._cancel_turn():
+            await self.send({"type": "notice", "code": "interrupted", "message": "Interrupted"})
+        self.session = self.deps.sessions.create()
+        logger.info("New conversation")
+        await self._send_session()
+        await self.send_state("idle")
 
     # ---------------------------------------------- hands-free (HandsFreeHost)
 

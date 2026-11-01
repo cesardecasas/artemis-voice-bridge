@@ -170,6 +170,7 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 | Type instead | The box at the bottom (Enter to send) |
 | Mute the voice | Speaker button, top right (remembered per device) |
 | Hands-free on/off | Mic button, top right, or **H** (remembered per device) |
+| New conversation | **+ New** above the conversation, or say **"Artemis, new conversation"** |
 
 **Hands-free mode** keeps the mic open and you just talk:
 
@@ -177,6 +178,7 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 - **"Artemis."** … *(chime)* … **"what's on my calendar?"** works too.
 - **Follow-ups need no wake word** for 8 s after Artemis finishes: "And tomorrow?"
 - While Artemis is talking, just say **"stop"** (or "enough", "be quiet", "Artemis, stop") to interrupt, and **"Artemis, <new question>"** cuts in. A stop phrase is never sent to the agent as a question.
+- **"Artemis, new conversation"** (or "start over", "start fresh", "new chat", "reset the conversation") starts a fresh conversation, then listens for your first question without the wake word.
 - Approval cards can be answered out loud: **"approve"** / **"yes, do it"** or **"deny"** / **"no"**.
 - Everything else said in the room is ignored. The server detects speech with Silero VAD and transcribes each phrase with the local Whisper; a phrase that doesn't start with "Artemis" is dropped and never logged or stored.
 
@@ -316,6 +318,15 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.9.0: New conversation
+
+- **New conversation** button above the conversation panel. Artemis stops talking, the panels clear, and the next message starts a fresh Hermes session. The old one stays in Hermes's session list.
+- **By voice:** "Artemis, new conversation" (also "start over", "start fresh", "new chat", "reset the conversation"). It works mid-reply, chimes, and listens for the first question without the wake word. Only the whole phrase counts, so "tell me about the new conversation feature" is a normal question.
+- **Fix: conversations now survive an Artemis restart.** Sessions were kept only in the app's memory, so after a restart the browser's saved id was replaced and Hermes started a blank conversation. A well-formed id the server doesn't know is now adopted, so Hermes picks the conversation up again. Malformed ids are still replaced.
+- Protocol: client `session.new`; the server replies with a new `session`. A `session` with a different id clears the HUD panels.
+- Verified live through Hermes: a code word was remembered, forgotten after "Artemis, new conversation", and remembered across an Artemis restart.
+- Tests: 115 backend, 30 frontend.
 
 ### 1.8.1: Stopping a long reply by voice
 

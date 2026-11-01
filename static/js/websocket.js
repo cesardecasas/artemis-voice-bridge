@@ -11,6 +11,7 @@ import { state } from "./state.js";
 import {
   abandonReply,
   appendMessage,
+  clearConversation,
   appendReplyToken,
   finishReply,
   hideAuthForm,
@@ -20,7 +21,7 @@ import {
   showSession,
   updateRecordButton,
 } from "./ui.js";
-import { abandonTools, settleApproval, showApproval, showToolEnd, showToolStart } from "./activity.js";
+import { abandonTools, clearActivity, settleApproval, showApproval, showToolEnd, showToolStart } from "./activity.js";
 import { notifyPlaybackIdle, onDisconnect, onHandsFreeStatus, resumeHandsFree } from "./handsfree.js";
 import { chime, playAudio, stopPlayback } from "./audio.js";
 import { agentDisplayName, refreshHealth, showLink, showMetrics } from "./health.js";
@@ -51,6 +52,17 @@ function requestToken() {
     hideAuthForm();
     connect();
   });
+}
+
+/** Start a new conversation: silence Artemis here; the server cancels the turn and sends a new session. */
+export function newConversation() {
+  if (!state.connected || state.isRecording || state.isStarting) return;
+  stopPlayback();
+  state.awaitingAudio = false;
+  state.suppressFollowUp = true;
+  abandonReply();
+  abandonTools();
+  sendMessage({ type: "session.new" });
 }
 
 /** Interrupt whatever Artemis is doing: stop local audio and cancel the server turn. */
@@ -105,6 +117,12 @@ export async function handleAudioFrame(data) {
 export async function handleServerMessage(message) {
   switch (message.type) {
     case "session":
+      if (state.sessionId && state.sessionId !== message.session_id) {
+        // A new conversation (button, voice, or the old one is gone).
+        clearConversation();
+        clearActivity();
+        setStatus("New conversation", COLORS.neutral);
+      }
       state.sessionId = message.session_id;
       state.connected = true;
       state.agentName = message.agent;

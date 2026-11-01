@@ -152,6 +152,7 @@ class FakeHost:
         self.busy = False
         self.pending_approval = False
         self.approvals: list[bool] = []
+        self.new_sessions = 0
 
     async def transcribe_segment(self, wav: bytes) -> str:
         assert wav[:4] == b"RIFF"
@@ -175,6 +176,10 @@ class FakeHost:
 
     async def interrupt_turn(self) -> None:
         self.interrupts += 1
+        self.busy = False
+
+    async def new_session(self) -> None:
+        self.new_sessions += 1
         self.busy = False
 
 
@@ -325,4 +330,34 @@ async def test_stop_with_wake_word_is_never_sent_to_the_agent(phrase: str) -> No
     await say(hands)
     assert host.turns == []
     assert host.interrupts == 1
+    await hands.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "phrase",
+    ["Artemis, new conversation.", "Artemis, start a new conversation please", "Hey Artemis, let's start over.",
+     "Artemis, start fresh", "Artemis, new chat", "Artemis, reset the conversation."],
+)
+async def test_new_conversation_by_voice(phrase: str) -> None:
+    host = FakeHost([phrase, "what's the weather?"])
+    host.busy = True  # works mid-reply too
+    hands = make(host)
+    await say(hands)
+    assert host.new_sessions == 1 and host.turns == []
+    assert host.statuses[-1] == ("listening", "new_session")
+    await say(hands)  # ask right away, no wake word needed
+    assert host.turns == ["what's the weather?"]
+    await hands.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize(
+    "phrase", ["New conversation.", "Artemis, tell me about the new conversation feature", "Artemis, start over the download"]
+)
+async def test_not_a_new_conversation(phrase: str) -> None:
+    host = FakeHost([phrase])
+    hands = make(host)
+    await say(hands)
+    assert host.new_sessions == 0
     await hands.close()

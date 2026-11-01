@@ -560,3 +560,26 @@ def test_handsfree_stop_while_the_browser_is_still_playing() -> None:
     assert {"type": "notice", "code": "interrupted", "message": "Interrupted"} in frames
     assert {"type": "handsfree", "status": "armed", "reason": "stopped"} in frames
     assert not any(isinstance(f, dict) and f["type"] == "transcript.final" for f in frames)
+
+
+def test_new_conversation_gets_a_fresh_session() -> None:
+    sessions = SessionStore()
+    with make_client(sessions=sessions) as client, client.websocket_connect("/ws") as ws:
+        first = hello(ws)
+        ws.send_json({"type": "text.input", "text": "remember me"})
+        recv_until(ws)
+        ws.send_json({"type": "session.new"})
+        session = recv(ws)
+        assert recv(ws) == {"type": "state", "value": "idle"}
+    assert isinstance(session, dict) and session["type"] == "session"
+    assert session["session_id"] != first
+    assert sessions.get_or_create(session["session_id"]).history == []
+
+
+def test_session_id_survives_a_server_restart() -> None:
+    """A fresh process adopts the browser's id, so Hermes keeps the conversation."""
+    saved = "0123456789abcdef0123456789abcdef"
+    with make_client(sessions=SessionStore()) as client, client.websocket_connect("/ws") as ws:
+        assert hello(ws, saved) == saved
+    with make_client(sessions=SessionStore()) as client, client.websocket_connect("/ws") as ws:
+        assert hello(ws, "../../etc/passwd") != "../../etc/passwd", "malformed ids are replaced"

@@ -572,3 +572,39 @@ test('an approval answered by voice settles its card without a second answer', a
   assert.match(card.querySelector('approval-result').innerText, /Denied by voice/);
   assert.ok(!sentTypes().includes('approval.response'), 'the server already has the answer');
 });
+
+
+// ------------------------------------------------------------- new conversation
+
+test('a new session id clears the conversation and activity panels', async () => {
+  handsFreeReset();
+  state.sessionId = 'aaaa';
+  uiModule.appendMessage('user', 'old question');
+  await handleServerMessage({ type: 'agent.approval_request', id: 'z1', action: 'Run', detail: 'ls' });
+  const card = cards()[0];
+
+  await handleServerMessage({ type: 'session', session_id: 'bbbb', protocol: 1, agent: 'hermes' });
+
+  assert.equal(messages().length, 0);
+  assert.equal(cards().length, 0);
+  assert.ok(card.classList.contains('approval-denied'), 'open approval is settled');
+  assert.equal(state.sessionId, 'bbbb');
+});
+
+test('reconnecting to the same session keeps the panels', async () => {
+  handsFreeReset();
+  state.sessionId = 'aaaa';
+  uiModule.appendMessage('user', 'still here');
+  await handleServerMessage({ type: 'session', session_id: 'aaaa', protocol: 1, agent: 'hermes' });
+  assert.equal(messages().length, 1);
+});
+
+test('the New button asks the server for a new session and silences Artemis', async () => {
+  handsFreeReset();
+  await handleServerMessage({ type: 'state', value: 'speaking' });
+  await handleServerMessage(chunk(0, 1));
+  await handleAudioFrame(wav(1));
+  ws.newConversation();
+  assert.ok(globalThis.__sources[0].stopped);
+  assert.ok(sentTypes().includes('session.new'));
+});
