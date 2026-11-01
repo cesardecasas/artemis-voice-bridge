@@ -21,7 +21,7 @@
  * @property {number | null} meterId  requestAnimationFrame id of the level meter.
  * @property {ReturnType<typeof setTimeout> | undefined} recordingTimer
  * @property {ReturnType<typeof setTimeout> | undefined} reconnectTimer
- * @property {HTMLAudioElement | null} currentAudio
+ * @property {boolean} playing  Reply audio is playing or queued.
  * @property {boolean} isRecording
  * @property {boolean} isStarting
  * @property {boolean} isStopping
@@ -49,7 +49,7 @@ export const state = {
   meterId: null,
   recordingTimer: undefined,
   reconnectTimer: undefined,
-  currentAudio: null,
+  playing: false,
   isRecording: false,
   isStarting: false,
   isStopping: false,

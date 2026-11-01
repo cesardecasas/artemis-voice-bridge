@@ -96,7 +96,7 @@ export function visualizerEl() {
 export function effectiveState() {
   if (!state.connected) return "offline";
   if (state.isRecording || state.isStarting) return "listening";
-  if (state.currentAudio || state.awaitingAudio) return "speaking";
+  if (state.playing || state.awaitingAudio) return "speaking";
   return state.serverState;
 }
 

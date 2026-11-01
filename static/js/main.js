@@ -43,7 +43,7 @@ bindRecordClick(() => {
     return;
   }
   // Tapping while Artemis talks only interrupts; tap again to speak.
-  if (state.currentAudio || state.awaitingAudio) {
+  if (state.playing || state.awaitingAudio) {
     interrupt();
     return;
   }

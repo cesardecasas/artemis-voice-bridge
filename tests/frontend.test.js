@@ -102,7 +102,19 @@ function installDom() {
       async resume() { this.state = 'running'; }
       createMediaStreamSource() { return audioNode(); }
       createMediaElementSource() { return audioNode(); }
-      createAnalyser() { return { ...audioNode(), fftSize: 0, frequencyBinCount: 8, getByteFrequencyData() {} }; }
+      createAnalyser() { return { ...audioNode(), context: this, fftSize: 0, frequencyBinCount: 8, getByteFrequencyData() {} }; }
+      // Mock WAV decode: a chunk of N bytes lasts N seconds, to check scheduling.
+      async decodeAudioData(data) { return { duration: data.byteLength }; }
+      createBufferSource() {
+        const source = {
+          ...audioNode(), buffer: null, startAt: null, stopped: false, onended: null,
+          start(at) { this.startAt = at; },
+          stop() { this.stopped = true; },
+          finish() { this.onended?.(); },
+        };
+        globalThis.__sources.push(source);
+        return source;
+      }
       createOscillator() {
         const param = { setValueAtTime() {}, exponentialRampToValueAtTime() {} };
         return { ...audioNode(), type: '', frequency: param, start() {}, stop() {} };
@@ -159,6 +171,7 @@ const uiModule = await import('../static/js/ui.js');
 const { startRecording } = await import('../static/js/recorder.js');
 const ws = await import('../static/js/websocket.js');
 const { COLORS } = await import('../static/js/constants.js');
+const { stopPlayback } = await import('../static/js/audio.js');
 
 const { ui, setStatus, updateRecordButton, effectiveState } = uiModule;
 const { handleServerMessage, handleAudioFrame, parseServerMessage, consumeTokenFromUrl, interrupt } = ws;
@@ -173,9 +186,11 @@ function reset() {
     socket: null, connected: true, serverState: 'idle', muted: false,
     isRecording: false, isStarting: false, isStopping: false, isProcessing: false,
     stopRequested: false, recordingRequested: false, discardRecording: false,
-    awaitingAudio: false, currentAudio: null, analyser: null, meterId: null,
+    awaitingAudio: false, analyser: null, meterId: null,
   });
-  globalThis.__lastAudio = undefined;
+  stopPlayback();
+  state.playing = false;
+  globalThis.__sources = [];
 }
 
 const $ = (id) => elements[id];
@@ -304,30 +319,70 @@ test('interrupt marks the partial reply and sends interrupt', async () => {
 
 // ------------------------------------------------------------- audio
 
+const chunk = (seq, bytes) => ({ type: 'tts.chunk', seq, final: false, format: 'wav', bytes });
+const wav = (bytes) => new Uint8Array(bytes).buffer;
+
 test('tts.chunk waits for the binary WAV frame, then plays it', async () => {
   reset();
-  await handleServerMessage({ type: 'tts.chunk', seq: 0, final: true, format: 'wav', bytes: 4 });
+  await handleServerMessage(chunk(0, 2));
   assert.equal(state.awaitingAudio, true);
   assert.equal($('core').className, 'core is-speaking');
-  assert.equal(globalThis.__lastAudio, undefined, 'must not play before the frame arrives');
+  assert.equal(globalThis.__sources.length, 0, 'must not play before the frame arrives');
 
-  await handleAudioFrame(new Uint8Array([1, 2, 3, 4]).buffer);
+  await handleAudioFrame(wav(2));
 
   assert.equal(state.awaitingAudio, false);
-  assert.match(globalThis.__lastAudio.src, /^blob:/);
-  assert.equal(state.currentAudio, globalThis.__lastAudio);
+  assert.equal(globalThis.__sources.length, 1);
+  assert.equal(state.playing, true);
 
-  globalThis.__lastAudio.dispatchEvent(new Event('ended'));
-  assert.equal(state.currentAudio, null);
+  globalThis.__sources[0].finish();
+  assert.equal(state.playing, false);
   assert.equal($('core').className, 'core is-idle');
+});
+
+test('sentence chunks are scheduled back to back, without gaps', async () => {
+  reset();
+  for (const [seq, seconds] of [[0, 2], [1, 3], [2, 1]]) {
+    await handleServerMessage(chunk(seq, seconds));
+    await handleAudioFrame(wav(seconds));
+  }
+  const [first, second, third] = globalThis.__sources;
+  assert.ok(Math.abs(second.startAt - (first.startAt + 2)) < 1e-9, 'second starts when first ends');
+  assert.ok(Math.abs(third.startAt - (second.startAt + 3)) < 1e-9, 'third starts when second ends');
+
+  first.finish();
+  assert.equal(state.playing, true, 'still speaking while chunks remain');
+  second.finish();
+  third.finish();
+  assert.equal(state.playing, false);
+});
+
+test('interrupt flushes every queued chunk', async () => {
+  reset();
+  state.socket = new WebSocket('ws://x');
+  for (const seq of [0, 1]) {
+    await handleServerMessage(chunk(seq, 1));
+    await handleAudioFrame(wav(1));
+  }
+
+  interrupt();
+
+  assert.ok(globalThis.__sources.every((source) => source.stopped));
+  assert.equal(state.playing, false);
+  assert.equal($('core').className, 'core is-idle');
+
+  // The next reply starts right away, not after the flushed audio would have ended.
+  await handleServerMessage(chunk(0, 1));
+  await handleAudioFrame(wav(1));
+  assert.ok(globalThis.__sources.at(-1).startAt < 1);
 });
 
 test('muted: reply audio is not played', async () => {
   reset();
   state.muted = true;
-  await handleServerMessage({ type: 'tts.chunk', seq: 0, final: true, format: 'wav', bytes: 1 });
-  await handleAudioFrame(new Uint8Array([1]).buffer);
-  assert.equal(globalThis.__lastAudio, undefined);
+  await handleServerMessage(chunk(0, 1));
+  await handleAudioFrame(wav(1));
+  assert.equal(globalThis.__sources.length, 0);
   assert.equal(state.awaitingAudio, false);
 });
 
@@ -335,8 +390,8 @@ test('reply audio is dropped if the user is already recording again', async () =
   reset();
   state.awaitingAudio = true;
   state.isRecording = true;
-  await handleAudioFrame(new Uint8Array([1]).buffer);
-  assert.equal(globalThis.__lastAudio, undefined);
+  await handleAudioFrame(wav(1));
+  assert.equal(globalThis.__sources.length, 0);
   assert.equal(state.awaitingAudio, false);
 });
 
@@ -344,9 +399,9 @@ test('unexpected binary frames are ignored', async () => {
   reset();
   const quiet = console.warn;
   console.warn = () => {};
-  await handleAudioFrame(new Uint8Array([1]).buffer);
+  await handleAudioFrame(wav(1));
   console.warn = quiet;
-  assert.equal(globalThis.__lastAudio, undefined);
+  assert.equal(globalThis.__sources.length, 0);
 });
 
 // ------------------------------------------------------------- activity

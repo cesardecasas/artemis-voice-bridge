@@ -35,6 +35,7 @@ from artemis.protocol import (
     parse_client_message,
 )
 from artemis.services import ServiceError
+from artemis.speech import SentenceSplitter
 from artemis.session import Session, SessionStore
 
 logger = logging.getLogger("artemis-voice")
@@ -68,6 +69,75 @@ class VoiceDeps:
 
 def _ms_since(start: float) -> int:
     return round((time.perf_counter() - start) * 1000)
+
+
+class SpeechPipeline:
+    """Speaks a reply sentence by sentence while the agent is still writing it.
+
+    ``feed`` takes streamed agent text; complete sentences go to a queue that a
+    background task synthesizes **in order** and sends as ``tts.chunk`` + WAV.
+    So sentence 1 is playing on the client while sentence 2 is being
+    synthesized and sentence 3 is still being generated.
+
+    If TTS fails, one ``tts_unavailable`` error is sent and the rest of the
+    reply continues as text only.
+    """
+
+    def __init__(self, conn: VoiceConnection, started: float) -> None:
+        self._conn = conn
+        self._started = started
+        self._splitter = SentenceSplitter()
+        self._queue: asyncio.Queue[str | None] = asyncio.Queue()
+        self._input_done = False
+        self._seq = 0
+        self.first_audio_ms: int | None = None
+        self.failed = False
+        self._task = asyncio.create_task(self._worker())
+
+    def feed(self, text: str) -> None:
+        for sentence in self._splitter.feed(text):
+            self._queue.put_nowait(sentence)
+
+    async def finish(self) -> None:
+        """No more text: speak what's left and wait until every chunk is sent."""
+        # Synchronous up to the await, so the worker sees all of this at once.
+        self._input_done = True
+        for sentence in self._splitter.flush():
+            self._queue.put_nowait(sentence)
+        self._queue.put_nowait(None)
+        await self._task
+
+    async def cancel(self) -> None:
+        if self._task.done():
+            return
+        self._task.cancel()
+        try:
+            await self._task
+        except asyncio.CancelledError:
+            pass
+
+    async def _worker(self) -> None:
+        while (sentence := await self._queue.get()) is not None:
+            if self.failed:
+                continue
+            try:
+                wav = await self._conn.deps.tts.synthesize(sentence)
+            except ServiceError as error:
+                self.failed = True
+                await self._conn.send_error("tts_unavailable", str(error))
+                continue
+
+            if self._seq == 0:
+                self.first_audio_ms = _ms_since(self._started)
+                await self._conn.send_state("speaking")
+            # Only the end-of-input marker left in the queue: this is the last chunk.
+            final = self._input_done and self._queue.qsize() == 1
+            await self._conn.send_audio(
+                {"type": "tts.chunk", "seq": self._seq, "final": final,
+                 "format": "wav", "bytes": len(wav)},
+                wav,
+            )
+            self._seq += 1
 
 
 class VoiceConnection:
@@ -321,6 +391,7 @@ class VoiceConnection:
         first_audio_ms: int | None = None
         session = self._session()
         stage: ErrorCode = "internal"
+        speech: SpeechPipeline | None = None
 
         try:
             if audio is not None:
@@ -344,14 +415,18 @@ class VoiceConnection:
             stage = "agent_error"
             await self.send_state("thinking")
             ctx = AgentContext(session=session, request_approval=self._request_approval)
+            speech = SpeechPipeline(self, started)
             reply = ""
+            streamed = False
 
             async for event in self.deps.agent.stream(ctx, text):
                 match event:
                     case Token(text=token):
                         if first_token_ms is None:
                             first_token_ms = _ms_since(started)
+                        streamed = True
                         await self.send({"type": "agent.token", "text": token})
+                        speech.feed(token)
                     case ToolStart(id=tool_id, name=name, summary=summary):
                         await self.send(
                             {"type": "agent.tool_start", "id": tool_id, "name": name, "summary": summary}
@@ -363,18 +438,12 @@ class VoiceConnection:
                     case Done(text=final):
                         reply = final
 
+            if not streamed:
+                speech.feed(reply)  # agent that answers in one piece
             session.add("assistant", reply)
             await self.send({"type": "agent.done", "text": reply})
-
-            if reply.strip():
-                stage = "tts_unavailable"
-                await self.send_state("speaking")
-                wav = await self.deps.tts.synthesize(reply)
-                first_audio_ms = _ms_since(started)
-                await self.send_audio(
-                    {"type": "tts.chunk", "seq": 0, "final": True, "format": "wav", "bytes": len(wav)},
-                    wav,
-                )
+            await speech.finish()
+            first_audio_ms = speech.first_audio_ms
 
             await self.send(
                 {
@@ -399,6 +468,11 @@ class VoiceConnection:
             logger.exception("Turn failed at stage %s", stage)
             await self.send_error(stage if stage == "agent_error" else "internal", str(error))
             await self.send_state("idle")
+
+        finally:
+            # Interrupt / barge-in / failure: stop synthesizing the rest of the reply.
+            if speech is not None:
+                await speech.cancel()
 
 
 def _log_task_failure(task: asyncio.Task[None]) -> None:

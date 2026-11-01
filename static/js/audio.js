@@ -95,33 +95,6 @@ function runMeter(analyser, shouldRun) {
   state.meterId = requestAnimationFrame(draw);
 }
 
-/**
- * Fallback when the audio can't be routed through Web Audio: a gentle synthetic wave.
- * @param {() => boolean} shouldRun
- */
-function runSyntheticMeter(shouldRun) {
-  stopMeter();
-  const barEls = bars();
-  const core = coreEl();
-  let phase = 0;
-
-  const draw = () => {
-    if (!shouldRun()) {
-      stopMeter();
-      return;
-    }
-    phase += 0.18;
-    core.style.setProperty("--level", ((Math.sin(phase) + 1) / 4).toFixed(3));
-    for (let index = 0; index < barEls.length; index += 1) {
-      const wave = (Math.sin(phase + index * 0.55) + 1) / 2;
-      barEls[index].style.height = `${8 + wave * 28}px`;
-    }
-    state.meterId = requestAnimationFrame(draw);
-  };
-
-  state.meterId = requestAnimationFrame(draw);
-}
-
 /** Start the mic meter for the current recording. */
 export function startMicMeter() {
   if (state.analyser) {
@@ -164,89 +137,129 @@ export async function chime(kind) {
   }
 }
 
-// ------------------------------------------------------------- playback
+// ------------------------------------------------------------- playback queue
 
-/** Stop any reply that is currently playing (interrupt / barge-in). */
-export function stopPlayback() {
-  const audio = state.currentAudio;
-  if (!audio) {
-    return;
+/**
+ * Gapless reply playback (Phase 5). Each `tts.chunk` is one sentence; chunks
+ * are decoded in arrival order and scheduled back to back on the shared
+ * AudioContext, all through one analyser that drives the orb.
+ *
+ * `generation` is bumped by stopPlayback(): decodes still in flight from an
+ * interrupted reply see a stale generation and are dropped.
+ */
+const playback = {
+  /** @type {Set<AudioBufferSourceNode>} */
+  sources: new Set(),
+  /** @type {AnalyserNode | null} */
+  analyser: null,
+  /** Context time at which the last scheduled chunk ends. */
+  endsAt: 0,
+  generation: 0,
+  /** Keeps decode + schedule in arrival order. */
+  chain: Promise.resolve(),
+};
+
+/** Small lead so the first chunk never starts in the past. */
+const SCHEDULE_LEAD_S = 0.03;
+
+/** @param {AudioContext} ctx */
+function playbackAnalyser(ctx) {
+  if (!playback.analyser || playback.analyser.context !== ctx) {
+    playback.analyser = ctx.createAnalyser();
+    playback.analyser.fftSize = 64;
+    playback.analyser.connect(ctx.destination);
   }
-  audio.pause();
-  // Fire the same cleanup path as a natural end (revokes the blob URL).
-  audio.dispatchEvent(new Event("ended"));
-  state.currentAudio = null;
+  return playback.analyser;
+}
+
+function onQueueDrained() {
+  state.playing = false;
   stopMeter();
   renderCore();
 }
 
-/**
- * Route the element through an analyser so the orb follows the real voice.
- * @param {HTMLAudioElement} audio
- * @returns {Promise<AnalyserNode | null>}
- */
-async function analysePlayback(audio) {
-  const ctx = await outputAudio();
-  if (!ctx) return null;
-  try {
-    const source = ctx.createMediaElementSource(audio);
-    const analyser = ctx.createAnalyser();
-    analyser.fftSize = 64;
-    source.connect(analyser);
-    analyser.connect(ctx.destination);
-    return analyser;
-  } catch {
-    return null;
+/** Stop the reply and drop everything queued (interrupt / barge-in / mute). */
+export function stopPlayback() {
+  playback.generation += 1;
+  playback.endsAt = 0;
+  const sources = Array.from(playback.sources);
+  playback.sources.clear();
+  for (const source of sources) {
+    source.onended = null;
+    try {
+      source.stop();
+    } catch {
+      // already stopped
+    }
+  }
+  if (state.playing) {
+    onQueueDrained();
   }
 }
 
 /**
- * Play synthesized speech received from the server. Muted: skipped entirely.
- * The object URL is revoked once playback ends, so nothing is kept around.
+ * Queue one chunk of synthesized speech (a WAV sentence) after the previous one.
+ * Muted: skipped entirely.
  * @param {Blob} audioBlob
+ * @returns {Promise<void>} resolves once the chunk is scheduled (or dropped)
  */
-export async function playAudio(audioBlob) {
-  stopPlayback();
+export function playAudio(audioBlob) {
   if (state.muted) {
+    return Promise.resolve();
+  }
+  const generation = playback.generation;
+  state.playing = true;
+  renderCore();
+
+  playback.chain = playback.chain
+    .then(() => scheduleChunk(audioBlob, generation))
+    .catch((error) => {
+      console.error("Playback failed:", error);
+      if (generation === playback.generation && playback.sources.size === 0) {
+        onQueueDrained();
+      }
+    });
+  return playback.chain;
+}
+
+/**
+ * @param {Blob} audioBlob
+ * @param {number} generation
+ */
+async function scheduleChunk(audioBlob, generation) {
+  const ctx = await outputAudio();
+  if (!ctx) {
+    if (generation === playback.generation) {
+      onQueueDrained();
+      setStatus("Audio is blocked. Tap the core once to enable sound", COLORS.amber);
+    }
     return;
   }
 
-  const url = URL.createObjectURL(audioBlob);
-  const audio = new Audio(url);
-  let finished = false;
+  const buffer = await ctx.decodeAudioData(await audioBlob.arrayBuffer());
+  if (generation !== playback.generation) {
+    return; // interrupted while decoding
+  }
 
-  const finishPlayback = () => {
-    if (finished) {
-      return;
+  const source = ctx.createBufferSource();
+  source.buffer = buffer;
+  const analyser = playbackAnalyser(ctx);
+  source.connect(analyser);
+
+  const startAt = Math.max(ctx.currentTime + SCHEDULE_LEAD_S, playback.endsAt);
+  playback.endsAt = startAt + buffer.duration;
+  playback.sources.add(source);
+
+  source.onended = () => {
+    playback.sources.delete(source);
+    if (playback.sources.size === 0 && generation === playback.generation) {
+      onQueueDrained();
     }
-    finished = true;
-    URL.revokeObjectURL(url);
-    if (state.currentAudio === audio) {
-      state.currentAudio = null;
-      stopMeter();
-    }
-    renderCore();
   };
+  source.start(startAt);
 
-  audio.addEventListener("ended", finishPlayback, { once: true });
-  audio.addEventListener("error", finishPlayback, { once: true });
-
-  state.currentAudio = audio;
-  renderCore();
-
-  try {
-    const analyser = await analysePlayback(audio);
-    await audio.play();
-    const playing = () => state.currentAudio === audio && !audio.paused && !audio.ended;
-    if (analyser) {
-      runMeter(analyser, playing);
-    } else {
-      runSyntheticMeter(playing);
-    }
-  } catch (error) {
-    finishPlayback();
-    console.error("Playback failed:", error);
-    setStatus("Audio playback blocked. Tap the core once to enable sound", COLORS.amber);
+  if (state.meterId === null) {
+    runMeter(analyser, () => state.playing && !state.isRecording);
   }
 }
 
@@ -276,7 +289,7 @@ export async function cleanupRecording() {
   state.isRecording = false;
   state.recordingRequested = false;
   state.stopRequested = false;
-  if (!state.currentAudio) {
+  if (!state.playing) {
     stopMeter();
   }
 

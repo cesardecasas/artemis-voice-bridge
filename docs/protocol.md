@@ -37,7 +37,7 @@ Malformed messages get `error` with code `bad_request`; the connection stays ope
 | `agent.tool_end` | `id`, `ok`, `summary` | The tool finished |
 | `agent.approval_request` | `id`, `action`, `detail` | The agent wants permission. No answer within 120 s counts as denied |
 | `agent.done` | `text` | The complete, authoritative reply text |
-| `tts.chunk` | `seq`, `final`, `format: "wav"`, `bytes` | **One binary WAV frame follows immediately** |
+| `tts.chunk` | `seq`, `final`, `format: "wav"`, `bytes` | **One binary WAV frame follows immediately.** One chunk per sentence, `seq` counting from 0; play them back to back in order |
 | `metrics` | `stt_ms`, `first_token_ms`, `first_audio_ms`, `total_ms` | Timings for the turn, measured from the turn's start |
 | `notice` | `code: no_speech \| empty_recording \| interrupted`, `message` | Informational outcome; not an error |
 | `error` | `code: unauthorized \| rate_limited \| bad_request \| too_large \| stt_unavailable \| tts_unavailable \| agent_error \| internal`, `message` | Something failed. `message` is safe to show the user |
@@ -113,4 +113,4 @@ Each connection may start at most `ARTEMIS_TURNS_PER_MINUTE` turns per rolling m
 
 ## Planned (not yet implemented)
 
-- **Phase 5:** multiple `tts.chunk` events per turn (one per sentence, increasing `seq`, last one `final: true`).
+- **Phase 5 (done):** multiple `tts.chunk` events per turn (one per sentence, increasing `seq`). Chunks may arrive before `agent.done`. `final: true` marks the last chunk when the server knows it at send time; if the reply ends right after a chunk was sent, no chunk carries it. The end of a turn's audio is always signalled by `state: idle`.

@@ -275,7 +275,7 @@ def test_barge_in_audio_start_cancels_turn() -> None:
 
 
 def test_approval_round_trip() -> None:
-    with make_client(agent=EchoAgent(demo=True)) as client, client.websocket_connect("/ws") as ws:
+    with make_client(agent=EchoAgent(demo=True, token_delay=0.001)) as client, client.websocket_connect("/ws") as ws:
         hello(ws)
         ws.send_json({"type": "text.input", "text": "run the demo"})
 
@@ -393,3 +393,114 @@ def test_connection_limit() -> None:
         assert "agent.done" in types(recv_until(first))
 
     assert code == 1013
+
+
+# ---------------------------------------------------------------- Phase 5: streamed speech
+
+
+class ScriptAgent:
+    """Streams fixed tokens with a pause between them (a slow LLM)."""
+
+    name = "script"
+
+    def __init__(self, tokens: list[str], delay: float = 0.02) -> None:
+        self.tokens = tokens
+        self.delay = delay
+
+    async def health(self) -> ServiceStatus:
+        return "ready"
+
+    async def stream(self, ctx: AgentContext, text: str) -> AsyncIterator[AgentEvent]:
+        for token in self.tokens:
+            yield Token(token)
+            await asyncio.sleep(self.delay)
+        yield Done("".join(self.tokens))
+
+
+class GatedTts(FakeTts):
+    """First sentence synthesizes instantly; later ones block until cancelled."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.cancelled = False
+
+    async def synthesize(self, text: str) -> bytes:
+        self.calls.append(text)
+        if len(self.calls) == 1:
+            return WAV
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            self.cancelled = True
+            raise
+        return WAV
+
+
+class FailingTts(FakeTts):
+    async def synthesize(self, text: str) -> bytes:
+        self.calls.append(text)
+        raise ServiceError("Speech service is offline", service="tts")
+
+
+SENTENCES = ["First sentence here.", " Second one!", " And a third"]
+
+
+def test_speech_starts_before_the_reply_is_finished() -> None:
+    tts = FakeTts()
+    agent = ScriptAgent(SENTENCES, delay=0.05)
+    with make_client(tts=tts, agent=agent) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "text.input", "text": "talk"})
+        frames = recv_until(ws)
+
+    names = types(frames)
+    # Sentence 1 is already being spoken while tokens 2 and 3 are still arriving.
+    assert names.index("tts.chunk") < names.index("agent.done")
+    assert names.index("state:speaking") < names.index("agent.done")
+    assert tts.calls == ["First sentence here.", "Second one!", "And a third"]
+
+    chunks = [f for f in frames if isinstance(f, dict) and f["type"] == "tts.chunk"]
+    assert [c["seq"] for c in chunks] == [0, 1, 2]
+    assert [c["final"] for c in chunks] == [False, False, True]
+    for chunk in chunks:  # every chunk is immediately followed by its WAV frame
+        assert frames[frames.index(chunk) + 1] == WAV
+
+    metrics = next(f for f in frames if isinstance(f, dict) and f["type"] == "metrics")
+    assert metrics["first_audio_ms"] is not None
+    assert metrics["first_audio_ms"] < metrics["total_ms"]
+
+
+def test_interrupt_stops_remaining_speech() -> None:
+    tts = GatedTts()
+    agent = ScriptAgent(SENTENCES, delay=0.0)
+    with make_client(tts=tts, agent=agent) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "text.input", "text": "talk"})
+        frames = recv_until(ws, state="speaking")
+        while recv(ws) != WAV:  # first sentence's audio
+            pass
+
+        ws.send_json({"type": "interrupt"})
+        rest = recv_until(ws)
+
+    assert "tts.chunk" not in types(rest)
+    assert types(rest)[-2:] == ["notice", "state:idle"]
+    assert tts.cancelled
+    assert "state:speaking" in types(frames)
+
+
+def test_tts_failure_keeps_the_text_reply() -> None:
+    tts = FailingTts()
+    agent = ScriptAgent(SENTENCES, delay=0.0)
+    with make_client(tts=tts, agent=agent) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "text.input", "text": "talk"})
+        frames = recv_until(ws)
+
+    names = types(frames)
+    assert names.count("error") == 1, "one error, not one per sentence"
+    assert "tts.chunk" not in names
+    assert "agent.done" in names
+    assert tts.calls == ["First sentence here."], "stops trying after the first failure"
+    error = next(f for f in frames if isinstance(f, dict) and f["type"] == "error")
+    assert error["code"] == "tts_unavailable"

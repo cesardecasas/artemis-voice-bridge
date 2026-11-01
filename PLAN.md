@@ -155,10 +155,12 @@ Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital m
 
 ## Phase 5: Low-latency speech
 
-- [ ] **Sentence-chunked TTS:** buffer `agent.token` text, split it on sentence boundaries, and synthesize each sentence as soon as it's complete
-- [ ] Client-side **audio queue**: play `tts.chunk` frames in order with no gaps (Web Audio, not `new Audio()`)
-- [ ] **Barge-in:** pressing talk (or speaking, in Phase 7) while Artemis talks sends `interrupt` → the server cancels the agent and TTS, and the client flushes its queue
-- [ ] Measure and show time to first audio. Target: **under 1.5 s** after you stop speaking
+- [x] **Sentence-chunked TTS:** buffer `agent.token` text, split it on sentence boundaries, and synthesize each sentence as soon as it's complete
+- [x] Client-side **audio queue**: play `tts.chunk` frames in order with no gaps (Web Audio, not `new Audio()`)
+- [x] **Barge-in:** pressing talk (or speaking, in Phase 7) while Artemis talks sends `interrupt` → the server cancels the agent and TTS, and the client flushes its queue
+- [x] Measure and show time to first audio. Target: **under 1.5 s** after you stop speaking
+
+> **Status (2026-11-01):** done. With real Kokoro, the first sentence was ready at 738 ms while the reply finished generating at 3.8 s; later sentences were synthesized faster than they play, so there are no gaps. Interrupt cancels pending TTS and flushes the client queue. Not yet tried by ear in a browser.
 
 **Done when:** Artemis starts speaking its first sentence while the rest of the reply is still being generated, and you can cut it off.
 

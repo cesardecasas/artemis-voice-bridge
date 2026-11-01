@@ -10,14 +10,21 @@ from artemis.agent.base import AgentContext, AgentEvent, Done, Token, ToolEnd, T
 from artemis.services import ServiceStatus
 
 DEMO_TRIGGER = "demo"
+DEMO_TOKEN_DELAY = 0.08
+DEMO_SPEECH = (
+    "This is a demo of streamed speech. "
+    "Each sentence is spoken as soon as it is ready, while the rest is still being written. "
+    "Tap the core or press Escape to cut me off."
+)
 
 
 class EchoAgent:
     """Streams back ``I heard you say: ...`` word by word.
 
     With ``demo=True``, any message containing the word "demo" also emits a
-    fake tool call and an approval request, so the UI for those events can be
-    exercised before Hermes is connected.
+    fake tool call, an approval request and a longer, slowly streamed reply,
+    so the UI and sentence-by-sentence speech can be exercised before Hermes
+    is connected.
     """
 
     name = "echo"
@@ -30,17 +37,23 @@ class EchoAgent:
         return "ready"
 
     async def stream(self, ctx: AgentContext, text: str) -> AsyncIterator[AgentEvent]:
+        reply = f"I heard you say: {text}"
+        delay = self.token_delay
+
         if self.demo and DEMO_TRIGGER in text.lower():
             async for event in self._demo_tools(ctx):
                 yield event
+            # Several sentences, generated at a readable pace, to show that
+            # speech starts before the reply is finished (Phase 5).
+            reply = f"{reply.rstrip('.!? ')}. {DEMO_SPEECH}"
+            delay = delay or DEMO_TOKEN_DELAY
 
-        reply = f"I heard you say: {text}"
         words = reply.split(" ")
 
         for index, word in enumerate(words):
             yield Token(word if index == 0 else f" {word}")
-            if self.token_delay:
-                await asyncio.sleep(self.token_delay)
+            if delay:
+                await asyncio.sleep(delay)
 
         yield Done(reply)
 
