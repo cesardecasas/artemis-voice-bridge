@@ -1,2 +1,3 @@
 # Dev tooling, installed into venv/ (type checking for all three services)
 mypy==2.4.1
+pytest==8.4.2

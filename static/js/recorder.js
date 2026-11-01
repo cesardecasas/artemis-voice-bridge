@@ -1,34 +1,37 @@
 // @ts-check
-import { END_MARKER, MAX_RECORDING_MS, MIME_TYPE } from "./constants.js";
+import { COLORS, MAX_RECORDING_MS, MIME_TYPE } from "./constants.js";
 import { state } from "./state.js";
 import { setStatus, updateRecordButton } from "./ui.js";
-import { cleanupRecording, startVisualizer } from "./audio.js";
+import { cleanupRecording, startVisualizer, stopPlayback } from "./audio.js";
+import { isConnected, sendAudioChunk, sendMessage } from "./send.js";
 
 export async function startRecording() {
-  if (state.isRecording || state.isStarting || state.isStopping || state.isProcessing) {
+  // Allowed while Artemis is busy: starting a recording barges in and cancels the turn.
+  if (state.isRecording || state.isStarting || state.isStopping) {
     return;
   }
 
-  if (!state.socket || state.socket.readyState !== WebSocket.OPEN) {
+  if (!isConnected()) {
     state.recordingRequested = false;
-    setStatus("WebSocket not connected", "#ff0000");
+    setStatus("WebSocket not connected", COLORS.error);
     return;
   }
 
   if (!navigator.mediaDevices?.getUserMedia) {
     state.recordingRequested = false;
-    setStatus("Microphone requires HTTPS or localhost", "#ff0000");
+    setStatus("Microphone requires HTTPS or localhost", COLORS.error);
     return;
   }
 
   if (typeof MediaRecorder === "undefined" || !MediaRecorder.isTypeSupported(MIME_TYPE)) {
     state.recordingRequested = false;
-    setStatus("WebM/Opus recording not supported", "#ff0000");
+    setStatus("WebM/Opus recording not supported", COLORS.error);
     return;
   }
 
   state.isStarting = true;
   state.stopRequested = false;
+  state.discardRecording = false;
   state.recordedBytes = 0;
   updateRecordButton();
 
@@ -70,28 +73,20 @@ export async function startRecording() {
       state.recordedBytes += event.data.size;
       console.debug("Audio chunk:", event.data.size, "bytes");
 
-      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-        state.socket.send(event.data);
-      }
+      sendAudioChunk(event.data);
     };
 
     recorder.onstop = async () => {
       clearTimeout(state.recordingTimer);
 
-      const bytes = state.recordedBytes;
-
-      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-        state.socket.send(END_MARKER);
-        state.isProcessing = bytes > 0;
-
-        if (bytes > 0) {
-          setStatus("Processing...");
-        } else {
-          setStatus("Recording was empty");
-        }
-      } else {
+      if (state.discardRecording) {
+        state.discardRecording = false;
+        sendMessage({ type: "interrupt" });
+        setStatus("Recording cancelled");
+      } else if (!sendMessage({ type: "audio.end" })) {
+        // Otherwise the server answers with `state` events (transcribing, thinking, ...).
         state.isProcessing = false;
-        setStatus("Connection lost", "#ff0000");
+        setStatus("Connection lost", COLORS.error);
       }
 
       state.isStopping = false;
@@ -104,15 +99,20 @@ export async function startRecording() {
       state.recordingRequested = false;
       state.isRecording = false;
       state.isProcessing = false;
-      setStatus("Recording failed", "#ff0000");
+      setStatus("Recording failed", COLORS.error);
 
-      if (state.socket && state.socket.readyState === WebSocket.OPEN) {
-        state.socket.close();
-      }
+      // Discard the partial recording on the server.
+      sendMessage({ type: "interrupt" });
 
       await cleanupRecording();
       updateRecordButton();
     };
+
+    // Barge-in: silence Artemis locally; the server cancels its turn on audio.start.
+    stopPlayback();
+    if (!sendMessage({ type: "audio.start", format: "webm/opus" })) {
+      throw new Error("Connection lost");
+    }
 
     recorder.start(100);
 
@@ -136,7 +136,7 @@ export async function startRecording() {
     state.isRecording = false;
     state.isProcessing = false;
     const reason = error instanceof Error ? error.message : String(error);
-    setStatus(`Microphone error: ${reason}`, "#ff0000");
+    setStatus(`Microphone error: ${reason}`, COLORS.error);
     await cleanupRecording();
   } finally {
     state.isStarting = false;

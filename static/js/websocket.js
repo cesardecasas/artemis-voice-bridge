@@ -1,21 +1,63 @@
 // @ts-check
-import { CONNECTION_RETRY_MS } from "./constants.js";
+import { COLORS, CONNECTION_RETRY_MS, SESSION_STORAGE_KEY } from "./constants.js";
 import { state } from "./state.js";
-import { appendMessage, setAiVoiceState, setStatus, updateRecordButton } from "./ui.js";
-import { playAudio } from "./audio.js";
+import {
+  abandonReply,
+  appendMessage,
+  appendReplyToken,
+  finishReply,
+  setAiVoiceState,
+  setStatus,
+  showApproval,
+  showPipelineState,
+  showToolEnd,
+  showToolStart,
+  updateRecordButton,
+} from "./ui.js";
+import { playAudio, stopPlayback } from "./audio.js";
 import { stopRecording } from "./recorder.js";
+import { sendMessage } from "./send.js";
 
 /** @typedef {import("./types.js").ServerMessage} ServerMessage */
 
-const READY_COLOR = "#00ff00";
-const ERROR_COLOR = "#ff0000";
-
-/** Return to the idle "Connected" state unless a new recording has started. */
-function settleIdle() {
-  if (!state.isRecording && !state.isStarting) {
-    setAiVoiceState(false);
-    setStatus("Connected", READY_COLOR);
+/** @returns {string | null} */
+function loadSessionId() {
+  try {
+    return localStorage.getItem(SESSION_STORAGE_KEY);
+  } catch {
+    return null;
   }
+}
+
+/** @param {string} sessionId */
+function saveSessionId(sessionId) {
+  try {
+    localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+  } catch {
+    // Storage unavailable (private mode); the session just won't survive reloads.
+  }
+}
+
+/** Show "Connected" once nothing is happening locally or on the server. */
+function settleIdle() {
+  if (
+    state.serverState === "idle" &&
+    !state.isRecording &&
+    !state.isStarting &&
+    !state.awaitingAudio &&
+    !state.currentAudio
+  ) {
+    setAiVoiceState(false);
+    showPipelineState("idle");
+  }
+}
+
+/** Interrupt whatever Artemis is doing: stop local audio and cancel the server turn. */
+export function interrupt() {
+  stopPlayback();
+  state.awaitingAudio = false;
+  abandonReply();
+  sendMessage({ type: "interrupt" });
 }
 
 /**
@@ -36,7 +78,7 @@ export function parseServerMessage(raw) {
 }
 
 /**
- * Handle the binary frame that follows a `response` message with audio.
+ * Handle the binary frame that follows a `tts.chunk` message.
  * @param {ArrayBuffer} data
  */
 export async function handleAudioFrame(data) {
@@ -46,6 +88,11 @@ export async function handleAudioFrame(data) {
   }
 
   state.awaitingAudio = false;
+
+  if (state.isRecording || state.isStarting) {
+    return; // user is already talking again; drop the stale reply audio
+  }
+
   await playAudio(new Blob([data], { type: "audio/wav" }));
   settleIdle();
 }
@@ -53,36 +100,74 @@ export async function handleAudioFrame(data) {
 /** @param {ServerMessage} message */
 export async function handleServerMessage(message) {
   switch (message.type) {
-    case "transcription":
+    case "session":
+      state.sessionId = message.session_id;
+      saveSessionId(message.session_id);
+      console.info(`Session ${message.session_id} (agent: ${message.agent}, protocol v${message.protocol})`);
+      break;
+
+    case "state":
+      state.serverState = message.value;
+      state.isProcessing = ["transcribing", "thinking", "speaking"].includes(message.value);
+      if (message.value === "idle") {
+        settleIdle();
+      } else if (!state.isRecording || message.value === "listening") {
+        showPipelineState(message.value);
+      }
+      updateRecordButton();
+      break;
+
+    case "transcript.final":
       appendMessage("user", `You: ${message.text}`);
       break;
 
-    case "response":
-      appendMessage("artemis", `Artemis: ${message.text}`);
-      state.isProcessing = false;
-      state.awaitingAudio = message.audio !== null;
-      updateRecordButton();
-
-      if (!state.awaitingAudio) {
-        settleIdle();
-      }
+    case "agent.token":
+      appendReplyToken(message.text);
       break;
 
-    case "status":
-      setStatus(message.text);
-      if (message.text === "No speech detected") {
-        setAiVoiceState(false);
-        state.isProcessing = false;
-        updateRecordButton();
+    case "agent.tool_start":
+      showToolStart(message.id, message.summary);
+      break;
+
+    case "agent.tool_end":
+      showToolEnd(message.id, message.ok, message.summary);
+      break;
+
+    case "agent.approval_request":
+      showApproval(message.action, message.detail, (approved) => {
+        sendMessage({ type: "approval.response", id: message.id, approved });
+      });
+      break;
+
+    case "agent.done":
+      finishReply(message.text);
+      break;
+
+    case "tts.chunk":
+      state.awaitingAudio = true;
+      break;
+
+    case "metrics":
+      state.lastMetrics = message;
+      console.info(
+        `Turn: STT ${message.stt_ms ?? "–"} ms, first token ${message.first_token_ms ?? "–"} ms, ` +
+          `first audio ${message.first_audio_ms ?? "–"} ms, total ${message.total_ms} ms`,
+      );
+      break;
+
+    case "notice":
+      if (message.code === "interrupted") {
+        abandonReply();
       }
+      setStatus(message.message, COLORS.neutral);
       break;
 
     case "error":
-      console.error("Artemis error:", message.text);
+      console.error(`Artemis error [${message.code}]:`, message.message);
       setAiVoiceState(false);
-      state.isProcessing = false;
       state.awaitingAudio = false;
-      setStatus(`Error: ${message.text}`, ERROR_COLOR);
+      abandonReply();
+      setStatus(`Error: ${message.message}`, COLORS.error);
       updateRecordButton();
       break;
 
@@ -106,7 +191,7 @@ export function connect() {
 
   connection.onopen = () => {
     setAiVoiceState(false);
-    setStatus("Connected", READY_COLOR);
+    sendMessage({ type: "hello", session_id: state.sessionId ?? loadSessionId() });
     updateRecordButton();
   };
 
@@ -137,15 +222,17 @@ export function connect() {
 
     state.isProcessing = false;
     state.awaitingAudio = false;
+    state.serverState = "idle";
     state.recordingRequested = false;
     state.stopRequested = false;
+    abandonReply();
 
     if (state.isRecording && state.mediaRecorder) {
       stopRecording();
     }
 
     setAiVoiceState(false);
-    setStatus("Disconnected. Reconnecting...", ERROR_COLOR);
+    setStatus("Disconnected. Reconnecting...", COLORS.error);
     updateRecordButton();
     state.reconnectTimer = setTimeout(connect, CONNECTION_RETRY_MS);
   };

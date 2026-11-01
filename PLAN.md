@@ -92,16 +92,15 @@ server → client
   {type:"error", code, message}
 ```
 
-- [ ] Write the spec as `docs/protocol.md`
-- [ ] Implement it on the server and the client; the UI is driven by `state` events (no more string matching like `"No speech detected"`)
+- [x] Write the spec as `docs/protocol.md`
+- [x] Implement it on the server and the client; the UI is driven by `state` events (no more string matching like `"No speech detected"`)
 
 ### 3b. Backend package layout
 ```
 artemis/
-  config.py        # pydantic-settings, reads .env
+  config.py        # typed settings from .env (stdlib only: shared by 3 venvs)
   protocol.py      # event models
-  stt.py           # client for whisper_server
-  tts.py           # client for tts_server
+  services.py      # SttClient + TtsClient (one module instead of stt.py/tts.py)
   agent/
     base.py        # AgentBackend interface
     echo.py        # EchoAgent (today's behavior)
@@ -110,9 +109,9 @@ artemis/
   ws.py            # WebSocket handler
 main.py            # app factory, static mounts
 ```
-- [ ] Define the `AgentBackend` interface: `async def stream(session_id, text) -> AsyncIterator[AgentEvent]`
-- [ ] Implement `EchoAgent` so the behavior matches today; select it with `AGENT_BACKEND=echo` in `.env`
-- [ ] Split the WebSocket handler into a **receiver task** and a **pipeline task**, so `interrupt` can cancel transcription, agent work and TTS mid-flight
+- [x] Define the `AgentBackend` interface: `stream(ctx, text) -> AsyncIterator[AgentEvent]` (`ctx` carries the session and an `await request_approval(...)` callback)
+- [x] Implement `EchoAgent` so the behavior matches today; select it with `ARTEMIS_AGENT_BACKEND=echo` in `.env` (plus `ARTEMIS_ECHO_DEMO` for fake tool and approval events)
+- [x] Split the WebSocket handler into a **receiver task** and a **pipeline task**, so `interrupt` can cancel transcription, agent work and TTS mid-flight
 - [x] Add `GET /health` on the main app that aggregates STT, TTS and agent health
 
 ### 3c. Security (required before Hermes)
@@ -121,6 +120,8 @@ main.py            # app factory, static mounts
 - [ ] Limit the number of concurrent sessions and add a per-session rate limit
 
 **Done when:** the app behaves as it does today, but runs on the new protocol and the `EchoAgent`, and the backend tests pass.
+
+> **Status (2026-11-01):** 3a and 3b done: 15 backend protocol tests, a verified end-to-end voice turn (0.9 s), and interrupt/barge-in working. Pulled forward from later phases: Esc to interrupt (Phase 4), barge-in on the server side (Phase 5), and minimal approval buttons (full cards in Phase 4). **3c (security) is still open**; it needs decisions on how you access the app.
 
 ---
 

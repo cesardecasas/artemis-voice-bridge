@@ -160,6 +160,29 @@
 
         .user { color: var(--primary); }
         .artemis { color: #dfeaff; }
+        .tool {
+            color: var(--muted);
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.86rem;
+            white-space: pre-wrap;
+        }
+        .approval {
+            border: 1px solid rgba(255, 196, 92, 0.4);
+            border-radius: 10px;
+            padding: 8px 10px;
+            color: #ffd88a;
+        }
+        .approval button {
+            margin: 8px 8px 0 0;
+            padding: 5px 14px;
+            border-radius: 999px;
+            border: 1px solid var(--border);
+            background: rgba(123, 208, 255, 0.12);
+            color: var(--text);
+            font: inherit;
+            cursor: pointer;
+        }
+        .approval button:disabled { opacity: 0.45; cursor: default; }
 
         .controls {
             display: flex;

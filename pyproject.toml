@@ -1,6 +1,6 @@
 [project]
 name = "artemis-voice-bridge"
-version = "1.2.0"
+version = "1.3.0"
 description = "Local, self-contained voice interface for the Artemis assistant"
 requires-python = ">=3.12"
 

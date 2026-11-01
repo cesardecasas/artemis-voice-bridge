@@ -1,6 +1,7 @@
 // @ts-check
 import { VISUALIZER_BARS } from "./constants.js";
 import { state } from "./state.js";
+import { COLORS } from "./constants.js";
 import { setAiVoiceState, setStatus, updateRecordButton, visualizerEl } from "./ui.js";
 
 /** @returns {HTMLElement[]} */
@@ -70,6 +71,20 @@ function startPlaybackAnimation() {
   state.playbackAnimationId = requestAnimationFrame(draw);
 }
 
+/** Stop any reply that is currently playing (interrupt / barge-in). */
+export function stopPlayback() {
+  const audio = state.currentAudio;
+  if (!audio) {
+    return;
+  }
+  audio.pause();
+  // Fire the same cleanup path as a natural end (revokes the blob URL).
+  audio.dispatchEvent(new Event("ended"));
+  state.currentAudio = null;
+  setAiVoiceState(false);
+  stopPlaybackAnimation();
+}
+
 /**
  * Play synthesized speech received from the server.
  * The object URL is revoked once playback ends, so nothing is kept around.
@@ -115,7 +130,7 @@ export async function playAudio(audioBlob) {
   } catch (error) {
     finishPlayback();
     console.error("Playback failed:", error);
-    setStatus("Audio playback blocked or unavailable", "#ff0000");
+    setStatus("Audio playback blocked or unavailable", COLORS.error);
   }
 }
 

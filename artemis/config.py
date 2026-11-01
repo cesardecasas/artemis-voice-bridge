@@ -60,6 +60,13 @@ def _float(name: str, default: float) -> float:
         raise ValueError(f"{name} must be a number, got {raw!r}") from error
 
 
+def _bool(name: str, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None or raw == "":
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
 def _path(name: str, default: Path) -> Path:
     raw = os.environ.get(name)
     if not raw:
@@ -109,10 +116,20 @@ class TtsSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class AgentSettings:
+    """Which brain answers: ``echo`` (placeholder) or ``hermes`` (Phase 6)."""
+
+    backend: str
+    echo_demo: bool
+    """Echo agent emits fake tool/approval events for messages containing "demo"."""
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     app: AppSettings
     stt: SttSettings
     tts: TtsSettings
+    agent: AgentSettings
 
 
 @lru_cache(maxsize=1)
@@ -163,4 +180,9 @@ def get_settings() -> Settings:
         tts_url=_str("ARTEMIS_TTS_URL", f"http://{tts.host}:{tts.port}"),
     )
 
-    return Settings(app=app, stt=stt, tts=tts)
+    agent = AgentSettings(
+        backend=_str("ARTEMIS_AGENT_BACKEND", "echo"),
+        echo_demo=_bool("ARTEMIS_ECHO_DEMO", False),
+    )
+
+    return Settings(app=app, stt=stt, tts=tts, agent=agent)

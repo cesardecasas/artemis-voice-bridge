@@ -13,18 +13,19 @@ Artemis Voice Bridge is the voice interface for **Artemis**, a local AI assistan
 ```
  Browser (phone / desktop)
    │  mic → MediaRecorder (WebM/Opus)
-   │  WebSocket /ws
+   │  WebSocket /ws  (typed JSON events + binary audio, see docs/protocol.md)
    ▼
- main.py  ── Voice app, :8080 (venv/) ─────────────────────────────┐
-   │  1. collect audio chunks in memory until END_MARKER           │
-   │  2. POST /transcribe ──────► whisper_server.py  :8083         │
-   │                               Whisper Large-v3-Turbo,         │
-   │                               OpenVINO on Arc Pro B50 (GPU.0) │
-   │  3. agent reply (echo for now → Hermes later)                 │
-   │  4. POST /synthesize ──────► tts_server.py      :8084         │
-   │                               Kokoro-82M, ONNX Runtime (CPU)  │
-   │  5. send JSON "response" + one binary WAV frame               │
-   └───────────────────────────────────────────────────────────────┘
+ main.py → artemis.ws.VoiceConnection ── Voice app, :8080 (venv/) ─────┐
+   │  receive loop (always listening for interrupt / barge-in)         │
+   │  turn task (cancellable):                                         │
+   │    1. SttClient ──────────► whisper_server.py  :8083              │
+   │                              Whisper Large-v3-Turbo, OpenVINO B50 │
+   │    2. AgentBackend.stream   EchoAgent now → HermesAgent (Phase 6) │
+   │       tokens / tool events / approval requests → browser          │
+   │    3. TtsClient ──────────► tts_server.py      :8084              │
+   │                              Kokoro-82M, ONNX Runtime (CPU)       │
+   │    4. tts.chunk + binary WAV frame → browser                      │
+   └───────────────────────────────────────────────────────────────────┘
 ```
 
 Each service runs in its own virtualenv, so their dependency stacks never conflict:
@@ -41,7 +42,7 @@ Each service runs in its own virtualenv, so their dependency stacks never confli
 |---|---|
 | Whisper warm-up at startup | 0.5 s (so the first real request isn't slow) |
 | Kokoro TTS (CPU) | ~0.2× real time: 8 s of speech in 1.6 s; model loads in under 1 s |
-| Full turn (end of speech → reply audio received) | ~1.2 s for a short sentence |
+| Full turn (end of speech → reply audio received) | ~0.9 s for a short sentence (STT 130 ms, TTS ~750 ms) |
 
 ---
 
@@ -108,6 +109,8 @@ All settings live in `.env` and are read by [`artemis/config.py`](artemis/config
 | `ARTEMIS_TTS_VOICE` | `af_heart` | Artemis's voice (list: `GET :8084/voices`) |
 | `ARTEMIS_TTS_SPEED` | `1.0` | Speaking rate (0.5–2.0) |
 | `ARTEMIS_MAX_AUDIO_BYTES` | `20971520` | Max size of one recording |
+| `ARTEMIS_AGENT_BACKEND` | `echo` | `echo` (placeholder) or `hermes` (Phase 6) |
+| `ARTEMIS_ECHO_DEMO` | `false` | Echo agent emits a fake tool call + approval for messages containing "demo" |
 
 See [`.env.example`](.env.example) for the full list.
 
@@ -135,7 +138,7 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 
 | URL | Returns |
 |---|---|
-| `GET :8080/health` | `ready` or `degraded`, plus the status of the STT and TTS services |
+| `GET :8080/health` | `ready` or `degraded`, the STT/TTS service status, agent backend status, and session count |
 | `GET :8083/health` | Whisper status, model, device |
 | `GET :8084/health` | Kokoro status, model, default voice |
 | `GET :8084/voices` | All available voice IDs |
@@ -151,54 +154,57 @@ Then set `ARTEMIS_TTS_VOICE` in `.env` and restart.
 
 ---
 
-## WebSocket protocol (current)
+## WebSocket protocol
 
-Client → server:
+Full spec with examples: **[`docs/protocol.md`](docs/protocol.md)**. In short:
 
-| Frame | Meaning |
-|---|---|
-| binary | WebM/Opus audio chunk (every 100 ms while recording) |
-| binary `00 00 00 00` | End of recording |
+- Text frames carry typed JSON events; binary frames carry audio only.
+- Client → server: `hello`, `audio.start`, *(binary chunks)*, `audio.end`, `text.input`, `interrupt`, `approval.response`.
+- Server → client: `session`, `state`, `transcript.final`, `agent.token`, `agent.tool_start`/`tool_end`, `agent.approval_request`, `agent.done`, `tts.chunk` (+ one binary WAV frame), `metrics`, `notice`, `error`.
+- The UI is driven by `state` events (`idle → listening → transcribing → thinking → speaking → idle`).
+- **Interrupting:** press **Esc** to stop Artemis or cancel a recording. Starting a new recording while Artemis is busy cancels the current turn (barge-in).
+- **Sessions:** the session id is kept in `localStorage`, so a reload or reconnect resumes the same conversation history (held in server memory, last 50 sessions).
 
-Server → client (JSON text frames, typed in `main.py` and `static/js/types.js`):
-
-| `type` | Fields | Meaning |
-|---|---|---|
-| `status` | `text` | Progress (`Transcribing...`, `Generating speech...`, `No speech detected`) |
-| `transcription` | `text` | What you said |
-| `response` | `text`, `audio: {format: "wav", bytes} \| null` | Artemis's reply. If `audio` is set, **one binary WAV frame follows immediately** |
-| `error` | `text` | Something failed (the reply text is still sent if only TTS failed) |
-
-Synthesized audio is never written to disk. It goes straight from the TTS service, through the WebSocket, to a browser `Blob` URL, which is revoked after playback. Recordings are also buffered only in memory.
-
-> Phase 3 of the plan replaces this with a richer typed event protocol (`state`, `agent.token`, `agent.tool_*`, `interrupt`, …) for Hermes.
+Audio is never written to disk: recordings are buffered in memory, and reply audio goes straight to a browser `Blob` URL that is revoked after playback.
 
 ---
 
 ## Project layout
 
 ```
-main.py                 Voice app: WebSocket voice loop, /health, static hosting
+main.py                 App factory (create_app): /health, /ws, static hosting
 whisper_server.py       STT service (OpenVINO Whisper on the B50)
 tts_server.py           TTS service (Kokoro-82M on CPU)
 artemis/
   config.py             Typed settings shared by all three services (stdlib only)
+  protocol.py           WebSocket message types + client-message validation
+  ws.py                 VoiceConnection: receive loop, cancellable turns, approvals
+  services.py           SttClient / TtsClient for the local services
+  session.py            In-memory sessions with conversation history
+  agent/
+    base.py             AgentBackend protocol + events (Token, ToolStart, ToolEnd, Done)
+    echo.py             EchoAgent placeholder (with optional demo tool/approval events)
+    __init__.py         create_agent() picks the backend from ARTEMIS_AGENT_BACKEND
 static/
   index.html            UI: status pill, transcript, record orb, visualizer
   app.js                Boot file → js/main.js
   manifest.json         PWA manifest (local icons only)
   favicon.ico, icons/   App icons, generated by scripts/make_icons.py
   js/
-    types.js            JSDoc types for server messages (mirror of main.py)
-    constants.js        END_MARKER, MIME type, limits
+    types.js            JSDoc protocol types (mirror of artemis/protocol.py)
+    constants.js        MIME type, limits, colors, storage key
     state.js            Typed runtime state shared by modules
-    ui.js               DOM updates (status, button, transcript)
-    websocket.js        Connection, message parsing/dispatch, binary audio frames
-    recorder.js         Mic permission, MediaRecorder, chunk upload, max duration
-    audio.js            Playback of WAV blobs, visualizer animation, cleanup
-    main.js             Wires the record button and starts the connection
+    send.js             Typed sendMessage / sendAudioChunk
+    ui.js               DOM: status, button, streaming reply, tool lines, approvals
+    websocket.js        Connection, hello/session, event dispatch, interrupt()
+    recorder.js         Mic, MediaRecorder, audio.start/chunks/audio.end
+    audio.js            WAV playback, stopPlayback, visualizer, cleanup
+    main.js             Record button, Esc to interrupt, starts the connection
+docs/protocol.md        WebSocket protocol spec
 scripts/make_icons.py   Regenerates all icons (Pillow, run with venv-openvino)
-tests/frontend.test.js  Node tests with a lightweight DOM mock
+tests/
+  test_ws.py            Backend protocol tests (pytest, fake STT/TTS/agent)
+  frontend.test.js      Frontend tests (node --test, lightweight DOM mock)
 test_whisper_gpu.py     Whisper GPU benchmark
 test_tts.py             Kokoro TTS benchmark and voice audition
 start-/stop-artemis-voice.sh, check.sh
@@ -213,12 +219,14 @@ The codebase is typed end to end for maintainability:
 
 - **Python:** full type hints, checked by **mypy in `strict` mode** (`pyproject.toml`). mypy is installed once in `venv/` and pointed at each service's own venv with `--python-executable`, so it sees the right packages.
 - **Frontend:** plain ES modules with **JSDoc types plus `// @ts-check`**, checked by **TypeScript in `strict` mode** (`jsconfig.json`, `noEmit`). There's no build step; the browser still loads the files as they are.
-- **Shared contract:** WebSocket messages are `TypedDict`s in `main.py` and mirrored as JSDoc typedefs in `static/js/types.js`. The frontend `switch` over message types has an exhaustiveness check (`never`), so a new message type that isn't handled is a type error.
+- **Shared contract:** WebSocket messages are `TypedDict`s in `artemis/protocol.py`, mirrored as JSDoc typedefs in `static/js/types.js`. Client messages are validated by `parse_client_message`. The frontend `switch` over message types has an exhaustiveness check (`never`), so a new message type that isn't handled is a type error.
+- **Agent interface:** `AgentBackend` is a `typing.Protocol`, so any class with `name`, `stream()` and `health()` plugs in, and mypy verifies it.
 
 Run everything:
 
 ```bash
-./check.sh          # mypy (app, STT, TTS) + tsc + node tests
+./check.sh          # mypy (app, STT, TTS, tests) + tsc + pytest + node tests
+venv/bin/python -m pytest tests/ -q   # backend protocol tests only
 npm run typecheck   # frontend types only
 npm test            # frontend tests only
 ```
@@ -226,6 +234,33 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.3.0: Typed event protocol and backend package (Phase 3a–3b of `PLAN.md`)
+
+**Protocol v1** (see [`docs/protocol.md`](docs/protocol.md))
+- Replaced the 4-byte `END_MARKER` and the ad-hoc `status`/`response` messages with typed events: `hello`/`session`, `audio.start`/`audio.end`, `text.input`, `interrupt`, `approval.response` ↔ `state`, `transcript.final`, `agent.token`, `agent.tool_start`/`tool_end`, `agent.approval_request`, `agent.done`, `tts.chunk`, `metrics`, `notice`, `error` (with codes).
+- The UI is driven by `state` events instead of string matching.
+
+**Backend** (`main.py` split into the `artemis/` package)
+- `artemis/ws.py`: each connection has an always-on receive loop, and each turn runs as a cancellable task. This enables **interrupt** and **barge-in**, which wasn't possible before because the loop blocked during processing.
+- `artemis/agent/`: `AgentBackend` protocol with streamed events, plus `EchoAgent` (streams word by word). `ARTEMIS_AGENT_BACKEND` selects the backend; `ARTEMIS_ECHO_DEMO` exercises tool and approval events.
+- Approval requests are round-tripped to the browser (120 s timeout → denied).
+- `artemis/session.py`: sessions with conversation history survive reconnects and reloads.
+- `artemis/services.py`: `SttClient` / `TtsClient`; `ServiceError` now records which service failed.
+- `main.py` is now an app factory (`create_app`), so tests can inject fake services.
+- `/health` also reports the agent backend and the session count.
+- Turn metrics (STT, first token, first audio, total).
+
+**Frontend**
+- Streaming reply rendering (one bubble, finalized by `agent.done`), tool-activity lines, minimal Approve/Deny buttons.
+- **Esc** interrupts Artemis or cancels a recording; recording while Artemis is busy barges in.
+- Session id saved in `localStorage`.
+- New `send.js` with typed `sendMessage`; colors centralized in `COLORS`.
+
+**Tests**
+- New `tests/test_ws.py` (pytest, 15 tests): full turn, text input, no speech, empty recording, oversized-recording drain, STT failure, bad messages, interrupt, barge-in, approval round trip, session resume, health.
+- Frontend tests rewritten for the protocol (12 tests).
+- `check.sh` now runs mypy on the tests, plus pytest.
 
 ### 1.2.0: Self-containment cleanup (Phase 2 of `PLAN.md`)
 
