@@ -161,6 +161,9 @@ class VoiceConnection:
         self._turn_times: deque[float] = deque()
         self._closed = False
         self._handsfree: HandsFree | None = None
+        # Reply audio is playing in the browser: set by the first tts.chunk, cleared
+        # by playback.idle (or interrupt). Playback often outlasts the server's turn.
+        self._client_playing = False
         # With no token configured, the connection is trusted immediately.
         self.authenticated = not deps.access_token
 
@@ -177,6 +180,7 @@ class VoiceConnection:
         await self.send({"type": "error", "code": code, "message": message})
 
     async def send_audio(self, meta: TtsChunkMessage, wav: bytes) -> None:
+        self._client_playing = True
         # Held under one lock so no other event can slip between the two frames.
         async with self._send_lock:
             await self.ws.send_json(meta)
@@ -276,6 +280,7 @@ class VoiceConnection:
 
             case "audio.start":
                 # Barge-in: speaking over Artemis cancels the current turn.
+                self._client_playing = False
                 await self._cancel_turn()
                 self._recording = bytearray()
                 self._recording_too_large = False
@@ -294,6 +299,7 @@ class VoiceConnection:
 
             case "interrupt":
                 self._recording = None
+                self._client_playing = False
                 if await self._cancel_turn():
                     await self.send(
                         {"type": "notice", "code": "interrupted", "message": "Interrupted"}
@@ -313,6 +319,7 @@ class VoiceConnection:
                     )
                     return
                 await self._stop_handsfree(notify=False)
+                self._client_playing = False  # unknown until the next reply; don't trust a stale flag
                 self._handsfree = HandsFree(self, self.deps.vad.stream(), self.deps.handsfree)
                 await self.send_handsfree("armed", "started")
                 logger.info("Hands-free on")
@@ -321,6 +328,7 @@ class VoiceConnection:
                 await self._stop_handsfree()
 
             case "playback.idle":
+                self._client_playing = False
                 if self._handsfree is not None:
                     await self._handsfree.playback_finished()
 
@@ -349,7 +357,9 @@ class VoiceConnection:
             return ""
 
     def turn_active(self) -> bool:
-        return self._turn is not None and not self._turn.done()
+        running = self._turn is not None and not self._turn.done()
+        # Only trust the playback flag while hands-free reports it (playback.idle).
+        return running or (self._client_playing and self._handsfree is not None)
 
     def approval_pending(self) -> bool:
         return any(not future.done() for future in self._approvals.values())
@@ -368,7 +378,11 @@ class VoiceConnection:
         await self._start_turn(text=text, stt_ms=stt_ms)
 
     async def interrupt_turn(self) -> None:
-        if await self._cancel_turn():
+        was_playing = self._client_playing
+        self._client_playing = False
+        cancelled = await self._cancel_turn()
+        if cancelled or was_playing:
+            # Also when the server's turn is long over: the browser is still talking.
             await self.send({"type": "notice", "code": "interrupted", "message": "Interrupted"})
         await self.send_state("idle")
 

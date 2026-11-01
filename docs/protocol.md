@@ -112,7 +112,7 @@ To try it without Hermes, set `ARTEMIS_ECHO_DEMO=true` and say or type something
 ← {"type":"handsfree","status":"armed","reason":"timeout"}  8 s later, if nothing was said
 ```
 
-The server segments the stream with Silero VAD, transcribes each segment with the local Whisper service, and acts only on segments that start with the wake word, except in the `listening` window. While a turn is running the wake word is always required ("Artemis, stop" interrupts; "Artemis, <question>" barges in). With an approval card open, "approve"/"yes" or "deny"/"no" answers it, and the server sends `approval.resolved`. Segments are never stored, and text without the wake word is never logged. Details: `artemis/handsfree.py`.
+The server segments the stream with Silero VAD, transcribes each segment with the local Whisper service, and acts only on segments that start with the wake word, except in the `listening` window. While Artemis is busy (a turn is running, or its reply is still playing: from the first `tts.chunk` until `playback.idle`), the wake word is required for questions ("Artemis, <question>" barges in), but a bare stop phrase ("stop", "enough", "be quiet") interrupts on its own. Stop phrases are never sent to the agent. With an approval card open, "approve"/"yes" or "deny"/"no" answers it, and the server sends `approval.resolved`. Segments are never stored, and text without the wake word is never logged. Details: `artemis/handsfree.py`.
 
 ---
 

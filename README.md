@@ -176,7 +176,7 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 - **"Artemis, what's on my calendar?"** Wake word and question in one sentence.
 - **"Artemis."** … *(chime)* … **"what's on my calendar?"** works too.
 - **Follow-ups need no wake word** for 8 s after Artemis finishes: "And tomorrow?"
-- While Artemis is talking: **"Artemis, stop"** interrupts, and **"Artemis, <new question>"** cuts in.
+- While Artemis is talking, just say **"stop"** (or "enough", "be quiet", "Artemis, stop") to interrupt, and **"Artemis, <new question>"** cuts in. A stop phrase is never sent to the agent as a question.
 - Approval cards can be answered out loud: **"approve"** / **"yes, do it"** or **"deny"** / **"no"**.
 - Everything else said in the room is ignored. The server detects speech with Silero VAD and transcribes each phrase with the local Whisper; a phrase that doesn't start with "Artemis" is dropped and never logged or stored.
 
@@ -316,6 +316,14 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.8.1: Stopping a long reply by voice
+
+- **Fix:** "Artemis, stop" during a long reply was sent to the agent as a new question ("Understood. Standing by.") while the reply kept playing. The server had already finished generating, so it thought Artemis was idle, but the browser was still speaking. The server now treats Artemis as busy until the browser reports `playback.idle`.
+- A bare **"stop"** (also "stop talking", "enough", "be quiet", "wait") now interrupts without the wake word while Artemis is talking. Only the whole phrase counts, so "we should stop the launch" doesn't. "Thanks" alone doesn't count, because Whisper often hears it in silence; "Artemis, thanks" does.
+- A stop phrase is never sent to the agent, even right after Artemis goes quiet.
+- Verified live: a 10-sentence story, then "Stop." after generation finished but while it would still be playing: interrupted, no new turn.
+- Tests: 104 backend (15 new stop cases), 27 frontend.
 
 ### 1.8.0: Hands-free (Phase 7 of `PLAN.md`)
 

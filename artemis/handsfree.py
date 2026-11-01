@@ -9,9 +9,12 @@ connection gets a ``HandsFree`` controller:
                ("Artemis." → chime → "what's the weather?"), and for a
                follow-up window after Artemis finishes speaking.
 
-While a turn is running (Artemis thinking or speaking), the wake word is
-required again, so Artemis's own voice leaking into the mic can't trigger
-anything. "Artemis, stop" interrupts; "Artemis, <new question>" barges in.
+While Artemis is busy (thinking, or its reply is still playing in the
+browser, which can be long after the server finished synthesizing), the wake
+word is required for questions, so Artemis's own voice leaking into the mic
+can't start anything. Stopping is the exception: a bare "stop" / "be quiet" /
+"enough" (the whole phrase, nothing else) interrupts without the wake word.
+"Artemis, <new question>" barges in.
 While an approval card is open, "approve" / "deny" (with or without the wake
 word) answers it.
 
@@ -35,14 +38,22 @@ from artemis.wake import WAKE_WORD, match_approval, match_wake
 
 logger = logging.getLogger("artemis.handsfree")
 
+# Whole-utterance stop phrases. Matched on the full transcript, so a sentence
+# of Artemis's own speech that merely contains "stop" doesn't count.
 _STOP_COMMAND = re.compile(
-    r"^(stop|cancel|quiet|be quiet|shut up|enough|never ?mind|that's enough|thanks?|thank you)\W*$",
+    r"^(?:(?:ok(?:ay)?|hey|no|please)\W+)*"
+    r"(stop|stop it|stop talking|stop that|stop please|please stop|cancel|quiet|be quiet|"
+    r"shut up|enough|that's enough|ok that's enough|never ?mind|hold on|wait)"
+    r"(?:\W+(?:please|now|artemis))*\W*$",
     re.IGNORECASE,
 )
 MAX_QUEUED_SEGMENTS = 4
 
 # What Whisper "hears" in near-silence or noise. Only filtered when no wake word
 # was needed (follow-up window); "Artemis, thank you" still goes through.
+# "Artemis, thanks" ends the conversation like a stop (only with the wake word).
+_THANKS = re.compile(r"^(thanks?|thank you)(?:\W+\w+)?\W*$", re.IGNORECASE)
+
 _HALLUCINATIONS = frozenset(
     {"thank you", "thanks", "thank you for watching", "thanks for watching", "you", "bye",
      "okay", "ok", "so", "yeah", "hmm", "uh", "um"}
@@ -64,7 +75,9 @@ class HandsFreeHost(Protocol):
 
     async def transcribe_segment(self, wav: bytes) -> str: ...
     async def send_handsfree(self, status: HandsFreeStatus, reason: str) -> None: ...
-    def turn_active(self) -> bool: ...
+    def turn_active(self) -> bool:
+        """Artemis is busy: thinking, or its reply is still playing in the browser."""
+        ...
     def approval_pending(self) -> bool: ...
     async def resolve_approval_by_voice(self, approved: bool) -> None: ...
     async def start_voice_turn(self, text: str, stt_ms: int) -> None: ...
@@ -164,15 +177,19 @@ class HandsFree:
         wake = match_wake(text, self.config.wake_word)
         busy = self._host.turn_active()
 
-        if wake is None and not (listening and not busy):
+        # A bare stop phrase works without the wake word while Artemis is busy
+        # ("thanks" doesn't: Whisper hears it in silence and room noise).
+        busy_stop = busy and _STOP_COMMAND.match(text) is not None
+        if wake is None and not busy_stop and not (listening and not busy):
             logger.debug("Ignored a %.1f s segment without the wake word", segment.seconds)
             return
 
         command = wake.command if wake is not None else text
-        if wake is None and _normalized(command) in _HALLUCINATIONS and segment.seconds < 2.0:
+        if wake is None and _normalized(command) in _HALLUCINATIONS and segment.seconds < 2.0 and not busy:
             logger.debug("Ignored a likely Whisper hallucination in the follow-up window")
             return
-        if busy and _STOP_COMMAND.match(command):
+        if _STOP_COMMAND.match(command) or (wake is not None and _THANKS.match(command)):
+            # Never a question for the agent, even if Artemis just went quiet.
             logger.info("Stopped by voice")
             await self._host.interrupt_turn()
             await self._set("armed", "stopped")

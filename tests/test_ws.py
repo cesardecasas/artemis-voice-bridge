@@ -539,3 +539,24 @@ def test_handsfree_wake_word_turn_over_the_socket() -> None:
     metrics = next(f for f in frames if isinstance(f, dict) and f["type"] == "metrics")
     assert metrics["stt_ms"] is not None, "hands-free STT time is reported"
     assert stt.calls and stt.calls[0][:4] == b"RIFF", "segments go to STT as WAV"
+
+
+def test_handsfree_stop_while_the_browser_is_still_playing() -> None:
+    """Server turn finished, browser still speaking: a bare "stop" interrupts it."""
+    from tests.test_handsfree import UTTERANCE, LoudnessVad
+
+    stt = FakeStt("hello there")
+    with make_client(stt=stt, vad=LoudnessVad()) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "handsfree.start", "format": "pcm16", "sample_rate": 16000})
+        recv(ws)
+        ws.send_json({"type": "text.input", "text": "tell me a long story"})
+        recv_until(ws)  # turn done on the server; audio was sent, no playback.idle yet
+
+        stt.text = "Stop."
+        ws.send_bytes(UTTERANCE)
+        frames = [recv(ws) for _ in range(3)]
+
+    assert {"type": "notice", "code": "interrupted", "message": "Interrupted"} in frames
+    assert {"type": "handsfree", "status": "armed", "reason": "stopped"} in frames
+    assert not any(isinstance(f, dict) and f["type"] == "transcript.final" for f in frames)

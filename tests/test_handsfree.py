@@ -290,3 +290,39 @@ async def test_spoken_approval_resolves_the_pending_card() -> None:
     assert host.approvals == [True]
     assert host.turns == []
     await hands.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("phrase", ["Stop.", "stop", "Okay, stop.", "Please stop", "Stop talking.", "Enough.", "Be quiet!"])
+async def test_bare_stop_while_speaking_needs_no_wake_word(phrase: str) -> None:
+    host = FakeHost([phrase])
+    host.busy = True  # e.g. the browser is still playing a long reply
+    hands = make(host)
+    await say(hands)
+    assert host.interrupts == 1 and host.turns == []
+    assert host.statuses[-1] == ("armed", "stopped")
+    await hands.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("phrase", ["Thank you.", "Thanks.", "We should stop the launch now", "Don't stop."])
+async def test_not_a_bare_stop(phrase: str) -> None:
+    host = FakeHost([phrase])
+    host.busy = True
+    hands = make(host)
+    await say(hands)
+    assert host.interrupts == 0 and host.turns == []
+    await hands.close()
+
+
+@pytest.mark.anyio
+@pytest.mark.parametrize("phrase", ["Artemis, stop.", "Artemis, thanks.", "Artemis, that's enough"])
+async def test_stop_with_wake_word_is_never_sent_to_the_agent(phrase: str) -> None:
+    # The bug seen live: the reply was still playing but the server turn had
+    # ended, so "Artemis, stop." became a new question ("Understood. Standing by.").
+    host = FakeHost([phrase])
+    hands = make(host)  # not busy
+    await say(hands)
+    assert host.turns == []
+    assert host.interrupts == 1
+    await hands.close()
