@@ -129,23 +129,25 @@ main.py            # app factory, static mounts
 
 Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital motif, so it has its own identity rather than copying Jarvis's blue and orange. Fonts are self-hosted in `static/fonts/` (no Google Fonts).
 
-- [ ] **Core orb** (Canvas 2D or WebGL) replaces the "A" button, with one look per state:
-  - [ ] idle: slow breathing glow
-  - [ ] listening: driven by the live mic level
-  - [ ] transcribing/thinking: rotating arc segments
-  - [ ] speaking: driven by the real TTS audio through an `AnalyserNode` (replaces the fake sine animation)
-- [ ] **Layout:** core in the center, transcript panel on one side, activity feed on the other; on phones, collapse to the core plus a swipe-up transcript
-- [ ] **Transcript:** streaming tokens, markdown and code rendering, timestamps, copy button
-- [ ] **Text input** box (Enter to send), for when you can't speak
-- [ ] **Activity feed:** tool cards (spinner → ✓ or ✗) from `agent.tool_*` events
-- [ ] **Approval cards** with Approve and Deny buttons, from `agent.approval_request`
-- [ ] **Status strip:** STT (B50) / TTS / Agent / Link health dots plus per-turn latency from `metrics`
-- [ ] **Interaction:** tap to toggle, **hold Space** for push-to-talk, Esc to interrupt
-- [ ] **Sound cues:** short local chimes (`static/sounds/`) when listening starts and stops
-- [ ] Mute toggle, settings drawer (voice, speed, input mode)
-- [ ] Boot sequence animation when it connects
-- [ ] Respect `prefers-reduced-motion`
-- [ ] Update `tests/frontend.test.js` for the new state machine
+- [x] **Core orb** (SVG + CSS, no canvas needed) replaces the "A" button, with one look per state:
+  - [x] idle: slow breathing glow (green)
+  - [x] listening: driven by the live mic level
+  - [x] transcribing/thinking: rotating arc segments (thinking in dusk)
+  - [x] speaking: driven by the real TTS audio through an `AnalyserNode`
+- [x] **Layout:** core in the center, conversation on one side, activity on the other; phones stack core over conversation
+- [ ] **Transcript:** streaming tokens and timestamps done. Still to do: markdown and code rendering, copy button (more useful once Hermes replies)
+- [x] **Text input** box (Enter to send)
+- [x] **Activity feed:** tool cards (spinner → ✓ or ✗, with duration) from `agent.tool_*` events
+- [x] **Approval cards** with Approve and Deny buttons and a 120 s countdown, from `agent.approval_request`
+- [x] **Status strip:** Hearing (B50) / Voice / Agent / Link health plus per-turn latency from `metrics`
+- [x] **Interaction:** tap to toggle, **hold Space** for push-to-talk, Esc to interrupt or cancel
+- [x] **Sound cues:** short chimes synthesized with Web Audio (no sound files needed)
+- [ ] Mute toggle done. Still to do: settings drawer (voice, speed, input mode), which needs a voice-selection API first
+- [x] Boot fade-in when it connects
+- [x] Respect `prefers-reduced-motion`
+- [x] Update `tests/frontend.test.js` for the new state machine (19 tests)
+
+> **Status (2026-11-01):** HUD built from the approved mockup; all checks pass. Not yet tried in a real browser with a microphone. Remaining items (markdown, copy, settings drawer) are deferred until Hermes is connected.
 
 **Done when:** a full conversation runs on the new HUD with `EchoAgent`, and fake tool and approval events (from a debug mode in `EchoAgent`) render correctly.
 

@@ -14,48 +14,20 @@ import {
   appendReplyToken,
   finishReply,
   hideAuthForm,
-  setAiVoiceState,
+  renderCore,
   setStatus,
-  showApproval,
   showAuthForm,
-  showPipelineState,
-  showToolEnd,
-  showToolStart,
+  showSession,
   updateRecordButton,
 } from "./ui.js";
-import { playAudio, stopPlayback } from "./audio.js";
+import { abandonTools, showApproval, showToolEnd, showToolStart } from "./activity.js";
+import { chime, playAudio, stopPlayback } from "./audio.js";
+import { agentDisplayName, refreshHealth, showLink, showMetrics } from "./health.js";
 import { stopRecording } from "./recorder.js";
 import { sendMessage } from "./send.js";
+import { loadStored, store } from "./storage.js";
 
 /** @typedef {import("./types.js").ServerMessage} ServerMessage */
-
-/**
- * @param {string} key
- * @returns {string | null}
- */
-function loadStored(key) {
-  try {
-    return localStorage.getItem(key);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * @param {string} key
- * @param {string | null} value  null removes the key
- */
-function store(key, value) {
-  try {
-    if (value === null) {
-      localStorage.removeItem(key);
-    } else {
-      localStorage.setItem(key, value);
-    }
-  } catch {
-    // Storage unavailable (private mode); values just won't survive reloads.
-  }
-}
 
 /**
  * Device pairing: `https://artemis-v01/#token=XYZ` saves the token, then removes it
@@ -80,26 +52,14 @@ function requestToken() {
   });
 }
 
-/** Show "Connected" once nothing is happening locally or on the server. */
-function settleIdle() {
-  if (
-    state.serverState === "idle" &&
-    !state.isRecording &&
-    !state.isStarting &&
-    !state.awaitingAudio &&
-    !state.currentAudio
-  ) {
-    setAiVoiceState(false);
-    showPipelineState("idle");
-  }
-}
-
 /** Interrupt whatever Artemis is doing: stop local audio and cancel the server turn. */
 export function interrupt() {
   stopPlayback();
   state.awaitingAudio = false;
   abandonReply();
+  abandonTools();
   sendMessage({ type: "interrupt" });
+  renderCore();
 }
 
 /**
@@ -132,11 +92,12 @@ export async function handleAudioFrame(data) {
   state.awaitingAudio = false;
 
   if (state.isRecording || state.isStarting) {
+    renderCore();
     return; // user is already talking again; drop the stale reply audio
   }
 
   await playAudio(new Blob([data], { type: "audio/wav" }));
-  settleIdle();
+  renderCore();
 }
 
 /** @param {ServerMessage} message */
@@ -144,24 +105,25 @@ export async function handleServerMessage(message) {
   switch (message.type) {
     case "session":
       state.sessionId = message.session_id;
+      state.connected = true;
+      state.agentName = message.agent;
       store(SESSION_STORAGE_KEY, message.session_id);
       hideAuthForm();
-      console.info(`Session ${message.session_id} (agent: ${message.agent}, protocol v${message.protocol})`);
+      showSession(message.session_id);
+      showLink("ready", "wss · secured");
+      document.getElementById("agent-label")?.replaceChildren(agentDisplayName(message.agent));
+      document.body?.classList.remove("booting");
+      updateRecordButton();
       break;
 
     case "state":
       state.serverState = message.value;
       state.isProcessing = ["transcribing", "thinking", "speaking"].includes(message.value);
-      if (message.value === "idle") {
-        settleIdle();
-      } else if (!state.isRecording || message.value === "listening") {
-        showPipelineState(message.value);
-      }
-      updateRecordButton();
+      renderCore();
       break;
 
     case "transcript.final":
-      appendMessage("user", `You: ${message.text}`);
+      appendMessage("user", message.text);
       break;
 
     case "agent.token":
@@ -169,7 +131,7 @@ export async function handleServerMessage(message) {
       break;
 
     case "agent.tool_start":
-      showToolStart(message.id, message.summary);
+      showToolStart(message.id, message.name, message.summary);
       break;
 
     case "agent.tool_end":
@@ -177,6 +139,7 @@ export async function handleServerMessage(message) {
       break;
 
     case "agent.approval_request":
+      void chime("start");
       showApproval(message.action, message.detail, (approved) => {
         sendMessage({ type: "approval.response", id: message.id, approved });
       });
@@ -187,31 +150,35 @@ export async function handleServerMessage(message) {
       break;
 
     case "tts.chunk":
+      // The binary WAV frame always follows; playAudio skips it when muted.
       state.awaitingAudio = true;
+      renderCore();
       break;
 
     case "metrics":
       state.lastMetrics = message;
-      console.info(
-        `Turn: STT ${message.stt_ms ?? "–"} ms, first token ${message.first_token_ms ?? "–"} ms, ` +
-          `first audio ${message.first_audio_ms ?? "–"} ms, total ${message.total_ms} ms`,
-      );
+      showMetrics(message);
       break;
 
     case "notice":
       if (message.code === "interrupted") {
         abandonReply();
+        abandonTools();
       }
       setStatus(message.message, COLORS.neutral);
       break;
 
     case "error":
       console.error(`Artemis error [${message.code}]:`, message.message);
-      setAiVoiceState(false);
       state.awaitingAudio = false;
       abandonReply();
-      setStatus(`Error: ${message.message}`, COLORS.error);
-      updateRecordButton();
+      abandonTools();
+      void chime("error");
+      renderCore();
+      setStatus(message.message, COLORS.error);
+      if (message.code === "tts_unavailable" || message.code === "stt_unavailable") {
+        void refreshHealth();
+      }
       break;
 
     default: {
@@ -222,24 +189,39 @@ export async function handleServerMessage(message) {
   }
 }
 
+function markDisconnected() {
+  state.connected = false;
+  state.isProcessing = false;
+  state.awaitingAudio = false;
+  state.serverState = "idle";
+  state.recordingRequested = false;
+  state.stopRequested = false;
+  abandonReply();
+  abandonTools();
+  stopPlayback();
+  if (state.isRecording && state.mediaRecorder) {
+    stopRecording();
+  }
+  updateRecordButton();
+}
+
 export function connect() {
   clearTimeout(state.reconnectTimer);
 
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
   const wsUrl = `${protocol}//${window.location.host}/ws`;
 
+  showLink("loading", "connecting");
   const connection = new WebSocket(wsUrl);
   connection.binaryType = "arraybuffer";
   state.socket = connection;
 
   connection.onopen = () => {
-    setAiVoiceState(false);
     sendMessage({
       type: "hello",
       session_id: state.sessionId ?? loadStored(SESSION_STORAGE_KEY),
       token: loadStored(TOKEN_STORAGE_KEY),
     });
-    updateRecordButton();
   };
 
   connection.onmessage = async (event) => {
@@ -247,11 +229,9 @@ export function connect() {
       await handleAudioFrame(event.data);
       return;
     }
-
     if (typeof event.data !== "string") {
       return;
     }
-
     const message = parseServerMessage(event.data);
     if (message) {
       await handleServerMessage(message);
@@ -266,36 +246,25 @@ export function connect() {
     if (connection !== state.socket) {
       return;
     }
-
-    state.isProcessing = false;
-    state.awaitingAudio = false;
-    state.serverState = "idle";
-    state.recordingRequested = false;
-    state.stopRequested = false;
-    abandonReply();
-
-    if (state.isRecording && state.mediaRecorder) {
-      stopRecording();
-    }
-
-    setAiVoiceState(false);
-    updateRecordButton();
+    markDisconnected();
 
     if (event.code === CLOSE_CODES.unauthorized) {
       // Wrong or missing token: don't hammer the server, ask the user.
       store(TOKEN_STORAGE_KEY, null);
-      setStatus("Access token required", COLORS.error);
+      showLink("offline", "token required");
+      setStatus("Access token required", COLORS.amber);
       requestToken();
       return;
     }
 
     if (event.code === CLOSE_CODES.tryAgainLater) {
-      setStatus("Too many open connections. Retrying...", COLORS.error);
+      showLink("offline", "too many connections");
+      setStatus("Too many open connections. Retrying…", COLORS.error);
       state.reconnectTimer = setTimeout(connect, BUSY_RETRY_MS);
       return;
     }
 
-    setStatus("Disconnected. Reconnecting...", COLORS.error);
+    showLink("offline", "reconnecting");
     state.reconnectTimer = setTimeout(connect, CONNECTION_RETRY_MS);
   };
 }

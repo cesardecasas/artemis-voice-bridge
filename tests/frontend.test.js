@@ -1,128 +1,135 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-function makeMockElement() {
-  return {
-    innerText: '',
-    textContent: '',
-    style: {},
-    disabled: false,
-    attributes: {},
-    children: [],
-    classList: {
-      toggle() {},
-    },
-    setAttribute(name, value) {
-      this.attributes[name] = value;
-    },
-    getAttribute(name) {
-      return this.attributes[name];
-    },
-    appendChild(child) {
-      this.children.push(child);
-    },
-    getElementsByClassName() {
-      return [];
-    },
-    addEventListener() {},
-    scrollTop: 0,
-    scrollHeight: 0,
-    innerHTML: '',
-  };
+// ------------------------------------------------------------- tiny DOM mock
+
+class MockElement {
+  constructor(tag = 'div') {
+    this.tagName = tag.toUpperCase();
+    this.innerText = '';
+    this.innerHTML = '';
+    this.className = '';
+    this.style = { setProperty(name, value) { this[name] = value; } };
+    this.dataset = {};
+    this.disabled = false;
+    this.hidden = false;
+    this.attributes = {};
+    this.children = [];
+    this.parent = null;
+    this.listeners = {};
+    this.scrollTop = 0;
+    this.scrollHeight = 0;
+    const el = this;
+    this.classList = {
+      add: (...names) => { el.className = [...new Set([...el.className.split(' ').filter(Boolean), ...names])].join(' '); },
+      remove: (...names) => { el.className = el.className.split(' ').filter((n) => n && !names.includes(n)).join(' '); },
+      contains: (name) => el.className.split(' ').includes(name),
+    };
+  }
+  get isConnected() { return this.parent !== null; }
+  setAttribute(name, value) { this.attributes[name] = value; }
+  getAttribute(name) { return this.attributes[name]; }
+  appendChild(child) { child.parent = this; this.children.push(child); return child; }
+  append(...nodes) {
+    for (const node of nodes) {
+      if (typeof node === 'string') { this.innerText += node; } else { this.appendChild(node); }
+    }
+  }
+  replaceChildren(...nodes) { this.children = []; this.innerText = ''; this.append(...nodes); }
+  remove() {
+    if (this.parent) this.parent.children = this.parent.children.filter((c) => c !== this);
+    this.parent = null;
+  }
+  replaceWith(node) {
+    const parent = this.parent;
+    const index = parent.children.indexOf(this);
+    node.parent = parent;
+    parent.children[index] = node;
+    this.parent = null;
+  }
+  addEventListener(name, callback) { (this.listeners[name] ??= []).push(callback); }
+  click() { for (const callback of this.listeners.click ?? []) callback({ preventDefault() {} }); }
+  focus() {}
+  querySelector(selector) {
+    const cls = selector.replace(/^\./, '');
+    for (const child of this.children) {
+      if (child.className.split(' ').includes(cls)) return child;
+      const found = child.querySelector(selector);
+      if (found) return found;
+    }
+    return null;
+  }
+  /** All text below this node (for assertions). */
+  get text() { return [this.innerText, ...this.children.map((c) => c.text)].join(' ').trim(); }
 }
 
+let elements = {};
+
 function installDom() {
-  const recordBtn = makeMockElement();
-  const display = makeMockElement();
-  const status = makeMockElement();
-  const visualizer = makeMockElement();
-
-  const elements = {
-    'record-btn': recordBtn,
-    'display': display,
-    'status': status,
-    'visualizer': visualizer,
+  const svc = (id) => {
+    const item = new MockElement();
+    const value = new MockElement('span');
+    value.className = 'svc-value';
+    item.appendChild(value);
+    return item;
+  };
+  elements = {
+    'record-btn': new MockElement('button'),
+    core: new MockElement(),
+    'state-title': new MockElement(),
+    display: new MockElement(),
+    activity: new MockElement(),
+    status: new MockElement(),
+    visualizer: new MockElement(),
+    'session-label': new MockElement(),
+    'agent-label': new MockElement(),
+    metrics: new MockElement(),
+    'svc-stt': svc(), 'svc-tts': svc(), 'svc-agent': svc(), 'svc-link': svc(),
   };
 
+  globalThis.HTMLElement = MockElement;
   globalThis.document = {
-    getElementById(id) {
-      return elements[id];
-    },
-    createElement() {
-      return makeMockElement();
-    },
+    body: new MockElement('body'),
+    getElementById: (id) => elements[id] ?? null,
+    createElement: (tag) => new MockElement(tag),
   };
 
+  const audioNode = () => ({ connect(next) { return next ?? this; } });
   globalThis.window = {
-    location: {
-      protocol: 'http:',
-      host: 'localhost:8080',
-    },
+    location: { protocol: 'http:', host: 'localhost:8080' },
     AudioContext: class {
-      constructor() {
-        this.state = 'running';
+      constructor() { this.state = 'running'; this.currentTime = 0; this.destination = audioNode(); }
+      async resume() { this.state = 'running'; }
+      createMediaStreamSource() { return audioNode(); }
+      createMediaElementSource() { return audioNode(); }
+      createAnalyser() { return { ...audioNode(), fftSize: 0, frequencyBinCount: 8, getByteFrequencyData() {} }; }
+      createOscillator() {
+        const param = { setValueAtTime() {}, exponentialRampToValueAtTime() {} };
+        return { ...audioNode(), type: '', frequency: param, start() {}, stop() {} };
       }
-      createMediaStreamSource() {
-        return { connect() {} };
+      createGain() {
+        return { ...audioNode(), gain: { setValueAtTime() {}, exponentialRampToValueAtTime() {} } };
       }
-      createAnalyser() {
-        return {
-          fftSize: 0,
-          frequencyBinCount: 8,
-          getByteFrequencyData() {},
-        };
-      }
-      close() {
-        this.state = 'closed';
-      }
+      async close() { this.state = 'closed'; }
     },
     webkitAudioContext: undefined,
   };
 
   globalThis.navigator = {
-    mediaDevices: {
-      async getUserMedia() {
-        return {
-          getTracks() {
-            return [];
-          },
-        };
-      },
-    },
+    mediaDevices: { async getUserMedia() { return { getTracks: () => [] }; } },
   };
 
   globalThis.MediaRecorder = class {
-    static isTypeSupported() {
-      return true;
-    }
-
-    constructor(stream, options) {
-      this.stream = stream;
-      this.mimeType = options.mimeType;
-      this.state = 'inactive';
-      this.ondataavailable = null;
-      this.onstop = null;
-      this.onerror = null;
-    }
-
-    start() {
-      this.state = 'recording';
-    }
-
-    stop() {
-      this.state = 'inactive';
-      if (this.onstop) {
-        this.onstop();
-      }
-    }
+    static isTypeSupported() { return true; }
+    constructor(stream, options) { this.stream = stream; this.mimeType = options.mimeType; this.state = 'inactive'; }
+    start() { this.state = 'recording'; }
+    stop() { this.state = 'inactive'; this.onstop?.(); }
   };
 
-  globalThis.requestAnimationFrame = (callback) => {
-    callback();
-    return 1;
-  };
-
+  // Never run frames synchronously: meters loop until playback stops.
+  globalThis.requestAnimationFrame = () => 1;
   globalThis.cancelAnimationFrame = () => {};
+
   globalThis.Audio = class {
     constructor(src) {
       this.src = src;
@@ -131,240 +138,277 @@ function installDom() {
       this.listeners = {};
       globalThis.__lastAudio = this;
     }
-    addEventListener(name, callback) {
-      this.listeners[name] = callback;
-    }
+    addEventListener(name, callback) { this.listeners[name] = callback; }
+    dispatchEvent(event) { this.listeners[event.type]?.(event); }
     async play() {}
-    pause() {
-      this.paused = true;
-    }
+    pause() { this.paused = true; }
   };
 
   globalThis.WebSocket = class {
     static OPEN = 1;
-
-    constructor(url) {
-      this.url = url;
-      this.readyState = WebSocket.OPEN;
-      this.binaryType = 'arraybuffer';
-      this.onopen = null;
-      this.onmessage = null;
-      this.onclose = null;
-      this.sent = [];
-    }
-
-    send(payload) {
-      this.sent.push(payload);
-    }
-
-    close() {
-      this.readyState = 3;
-    }
+    constructor(url) { this.url = url; this.readyState = 1; this.sent = []; }
+    send(payload) { this.sent.push(payload); }
+    close() { this.readyState = 3; }
   };
 }
 
 installDom();
 
-const stateModule = await import('../static/js/state.js');
+const { state } = await import('../static/js/state.js');
 const uiModule = await import('../static/js/ui.js');
-const recorderModule = await import('../static/js/recorder.js');
-const websocketModule = await import('../static/js/websocket.js');
+const { startRecording } = await import('../static/js/recorder.js');
+const ws = await import('../static/js/websocket.js');
+const { COLORS } = await import('../static/js/constants.js');
 
-const { state } = stateModule;
-const { ui, setStatus, updateRecordButton } = uiModule;
-const { startRecording } = recorderModule;
-const { handleServerMessage, handleAudioFrame, parseServerMessage, consumeTokenFromUrl } = websocketModule;
+const { ui, setStatus, updateRecordButton, effectiveState } = uiModule;
+const { handleServerMessage, handleAudioFrame, parseServerMessage, consumeTokenFromUrl, interrupt } = ws;
 
-function resetUiRefs() {
-  ui.recordBtn = document.getElementById('record-btn');
-  ui.display = document.getElementById('display');
-  ui.status = document.getElementById('status');
-  ui.visualizer = document.getElementById('visualizer');
-}
-
-test('ui helpers update the status and record button state', () => {
+function reset() {
   installDom();
-  resetUiRefs();
-
-  state.isRecording = true;
-  state.isStarting = false;
-  state.isProcessing = false;
-  state.isStopping = false;
-
-  setStatus('Listening...', '#00ff00');
-  updateRecordButton();
-
-  assert.equal(document.getElementById('status').innerText, 'Listening...');
-  assert.equal(document.getElementById('record-btn').getAttribute('aria-label'), 'Stop recording');
-  assert.equal(document.getElementById('record-btn').getAttribute('aria-pressed'), 'true');
-});
-
-test('startRecording blocks when websocket is not connected', async () => {
-  installDom();
-  resetUiRefs();
-
-  state.socket = null;
-  state.isRecording = false;
-  state.isStarting = false;
-  state.isStopping = false;
-  state.isProcessing = false;
-
-  await startRecording();
-
-  assert.equal(document.getElementById('status').innerText, 'WebSocket not connected');
-  assert.equal(document.getElementById('status').style.color, '#ff5c7a'); // COLORS.error
-  assert.equal(state.recordingRequested, false);
-});
-
-test('state tracks the recording lifecycle', () => {
-  state.socket = null;
-  state.isRecording = false;
-  state.isStarting = false;
-  state.isStopping = false;
-  state.isProcessing = false;
-  state.stopRequested = false;
-  state.recordingRequested = false;
-  state.recordedBytes = 0;
-
-  state.isRecording = true;
-  state.recordedBytes = 128;
-
-  assert.equal(state.isRecording, true);
-  assert.equal(state.recordedBytes, 128);
-  assert.equal(state.recordingRequested, false);
-});
-
-function resetState() {
-  state.socket = null;
-  state.serverState = 'idle';
-  state.isRecording = false;
-  state.isStarting = false;
-  state.isStopping = false;
-  state.isProcessing = false;
-  state.awaitingAudio = false;
-  state.currentAudio = null;
-  ui.streamingReply = null;
-  ui.tools.clear();
+  Object.assign(ui, {
+    recordBtn: null, core: null, title: null, display: null, status: null,
+    visualizer: null, streamingReply: null, renderedState: null,
+  });
+  Object.assign(state, {
+    socket: null, connected: true, serverState: 'idle', muted: false,
+    isRecording: false, isStarting: false, isStopping: false, isProcessing: false,
+    stopRequested: false, recordingRequested: false, discardRecording: false,
+    awaitingAudio: false, currentAudio: null, analyser: null, meterId: null,
+  });
   globalThis.__lastAudio = undefined;
 }
 
-function lastMessage() {
-  return document.getElementById('display').children.at(-1);
-}
+const $ = (id) => elements[id];
+const messages = () => $('display').children;
+const cards = () => $('activity').children;
 
-test('parseServerMessage rejects invalid payloads', () => {
-  assert.equal(parseServerMessage('not json'), null);
-  assert.equal(parseServerMessage('{"text":"no type"}'), null);
-  assert.deepEqual(parseServerMessage('{"type":"state","value":"idle"}'), { type: 'state', value: 'idle' });
+// ------------------------------------------------------------- core + status
+
+test('the core shows the effective state with its title and hint', () => {
+  reset();
+  updateRecordButton();
+  assert.equal($('core').className, 'core is-idle');
+  assert.equal($('state-title').innerText, 'Standing by');
+
+  state.isRecording = true;
+  updateRecordButton();
+  assert.equal($('core').className, 'core is-listening');
+  assert.equal($('record-btn').getAttribute('aria-label'), 'Stop recording and send');
+  assert.equal($('record-btn').getAttribute('aria-pressed'), 'true');
+
+  state.isRecording = false;
+  state.connected = false;
+  updateRecordButton();
+  assert.equal($('core').className, 'core is-offline');
+  assert.equal($('record-btn').disabled, true);
 });
 
-test('state events drive status and processing flag', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
+test('local activity outranks the server state', () => {
+  reset();
+  state.serverState = 'thinking';
+  assert.equal(effectiveState(), 'thinking');
+  state.awaitingAudio = true;
+  assert.equal(effectiveState(), 'speaking');
+  state.isRecording = true;
+  assert.equal(effectiveState(), 'listening');
+});
 
+test('setStatus writes the hint line', () => {
+  reset();
+  setStatus('Hello', COLORS.amber);
+  assert.equal($('status').innerText, 'Hello');
+  assert.equal($('status').style.color, COLORS.amber);
+});
+
+test('startRecording blocks when the websocket is not connected', async () => {
+  reset();
+  await startRecording();
+  assert.equal($('status').innerText, 'WebSocket not connected');
+  assert.equal($('status').style.color, COLORS.error);
+  assert.equal(state.recordingRequested, false);
+});
+
+test('state events drive the core and the processing flag', async () => {
+  reset();
   await handleServerMessage({ type: 'state', value: 'thinking' });
   assert.equal(state.isProcessing, true);
-  assert.equal(document.getElementById('status').innerText, 'Thinking...');
+  assert.equal($('core').className, 'core is-thinking');
+  assert.equal($('state-title').innerText, 'Thinking');
 
   await handleServerMessage({ type: 'state', value: 'idle' });
   assert.equal(state.isProcessing, false);
-  assert.equal(document.getElementById('status').innerText, 'Connected');
+  assert.equal($('state-title').innerText, 'Standing by');
 });
 
-test('agent tokens stream into one reply bubble, finalized by agent.done', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
+// ------------------------------------------------------------- protocol
 
+test('parseServerMessage rejects invalid payloads', () => {
+  const quiet = console.error;
+  console.error = () => {};
+  try {
+    assert.equal(parseServerMessage('not json'), null);
+    assert.equal(parseServerMessage('{"text":"no type"}'), null);
+    assert.deepEqual(parseServerMessage('{"type":"state","value":"idle"}'), { type: 'state', value: 'idle' });
+  } finally {
+    console.error = quiet;
+  }
+});
+
+test('session wakes the HUD and labels the link and agent', async () => {
+  reset();
+  state.connected = false;
+  document.body.classList.add('booting');
+  globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+
+  await handleServerMessage({ type: 'session', session_id: 'abc12345', protocol: 1, agent: 'echo' });
+
+  assert.equal(state.sessionId, 'abc12345');
+  assert.equal(state.connected, true);
+  assert.equal(document.body.classList.contains('booting'), false);
+  assert.equal($('svc-link').dataset.status, 'ready');
+  assert.match($('session-label').innerText, /abc1·2345/);
+  assert.equal($('agent-label').text, 'Echo · placeholder');
+});
+
+// ------------------------------------------------------------- conversation
+
+test('agent tokens stream into one reply, finalized by agent.done', async () => {
+  reset();
   await handleServerMessage({ type: 'transcript.final', text: 'hi' });
   await handleServerMessage({ type: 'agent.token', text: 'I heard' });
   await handleServerMessage({ type: 'agent.token', text: ' you' });
 
-  const display = document.getElementById('display');
-  assert.equal(display.children.length, 2);
-  assert.equal(display.children[0].innerText, 'You: hi');
-  assert.equal(lastMessage().innerText, 'Artemis: I heard you');
+  assert.equal(messages().length, 2);
+  assert.equal(messages()[0].className, 'msg msg-user');
+  assert.match(messages()[0].text, /You .* hi/);
+  const reply = messages()[1];
+  assert.ok(reply.classList.contains('msg-streaming'));
+  assert.match(reply.text, /I heard you$/);
 
   await handleServerMessage({ type: 'agent.done', text: 'I heard you say: hi' });
-  assert.equal(lastMessage().innerText, 'Artemis: I heard you say: hi');
+  assert.match(reply.text, /I heard you say: hi$/);
+  assert.equal(reply.classList.contains('msg-streaming'), false);
   assert.equal(ui.streamingReply, null);
 });
 
-test('tts.chunk waits for the binary WAV frame, then plays it', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
+test('interrupt marks the partial reply and sends interrupt', async () => {
+  reset();
+  state.socket = new WebSocket('ws://x');
+  await handleServerMessage({ type: 'agent.token', text: 'Half a' });
 
+  interrupt();
+
+  assert.ok(messages()[0].classList.contains('msg-interrupted'));
+  assert.deepEqual(JSON.parse(state.socket.sent.at(-1)), { type: 'interrupt' });
+});
+
+// ------------------------------------------------------------- audio
+
+test('tts.chunk waits for the binary WAV frame, then plays it', async () => {
+  reset();
   await handleServerMessage({ type: 'tts.chunk', seq: 0, final: true, format: 'wav', bytes: 4 });
   assert.equal(state.awaitingAudio, true);
+  assert.equal($('core').className, 'core is-speaking');
   assert.equal(globalThis.__lastAudio, undefined, 'must not play before the frame arrives');
 
   await handleAudioFrame(new Uint8Array([1, 2, 3, 4]).buffer);
 
   assert.equal(state.awaitingAudio, false);
-  assert.ok(globalThis.__lastAudio, 'audio element created');
   assert.match(globalThis.__lastAudio.src, /^blob:/);
   assert.equal(state.currentAudio, globalThis.__lastAudio);
+
+  globalThis.__lastAudio.dispatchEvent(new Event('ended'));
+  assert.equal(state.currentAudio, null);
+  assert.equal($('core').className, 'core is-idle');
+});
+
+test('muted: reply audio is not played', async () => {
+  reset();
+  state.muted = true;
+  await handleServerMessage({ type: 'tts.chunk', seq: 0, final: true, format: 'wav', bytes: 1 });
+  await handleAudioFrame(new Uint8Array([1]).buffer);
+  assert.equal(globalThis.__lastAudio, undefined);
+  assert.equal(state.awaitingAudio, false);
 });
 
 test('reply audio is dropped if the user is already recording again', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
+  reset();
   state.awaitingAudio = true;
   state.isRecording = true;
-
   await handleAudioFrame(new Uint8Array([1]).buffer);
-
   assert.equal(globalThis.__lastAudio, undefined);
   assert.equal(state.awaitingAudio, false);
 });
 
 test('unexpected binary frames are ignored', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
-
+  reset();
+  const quiet = console.warn;
+  console.warn = () => {};
   await handleAudioFrame(new Uint8Array([1]).buffer);
-
+  console.warn = quiet;
   assert.equal(globalThis.__lastAudio, undefined);
 });
 
-test('tool events render and update in place', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
+// ------------------------------------------------------------- activity
 
+test('tool events render one card that updates in place', async () => {
+  reset();
   await handleServerMessage({ type: 'agent.tool_start', id: 't1', name: 'web.search', summary: 'Searching' });
-  assert.equal(lastMessage().innerText, '⚙ Searching…');
+  assert.equal(cards().length, 1);
+  assert.equal(cards()[0].className, 'tool tool-running');
+  assert.match(cards()[0].text, /Searching web\.search · running/);
 
   await handleServerMessage({ type: 'agent.tool_end', id: 't1', ok: true, summary: 'Found 3 results' });
-  assert.equal(document.getElementById('display').children.length, 1);
-  assert.equal(lastMessage().innerText, '✓ Found 3 results');
+  assert.equal(cards().length, 1);
+  assert.equal(cards()[0].className, 'tool tool-ok');
+  assert.match(cards()[0].text, /Found 3 results web\.search · \d+\.\d s/);
 });
 
-test('error messages clear pending audio and show the message', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
-  state.awaitingAudio = true;
+test('approval card sends the decision once and settles', async () => {
+  reset();
+  state.socket = new WebSocket('ws://x');
+  await handleServerMessage({ type: 'agent.approval_request', id: 'a1', action: 'Restart Plex', detail: 'docker restart plex' });
 
+  const card = cards()[0];
+  assert.equal(card.className, 'approval');
+  const actions = card.querySelector('approval-actions');
+  const [deny, approve] = actions.children;
+  assert.equal(approve.innerText, 'Approve');
+
+  approve.click();
+  approve.click(); // second click must be a no-op
+
+  const responses = state.socket.sent.map((s) => JSON.parse(s)).filter((m) => m.type === 'approval.response');
+  assert.deepEqual(responses, [{ type: 'approval.response', id: 'a1', approved: true }]);
+  assert.ok(card.classList.contains('approval-approved'));
+  assert.equal(card.querySelector('approval-actions'), null, 'buttons replaced by the result');
+  assert.match(card.querySelector('approval-result').innerText, /Approved/);
+  void deny;
+});
+
+test('errors clear pending audio, cut off tools and show the message', async () => {
+  reset();
+  state.awaitingAudio = true;
+  await handleServerMessage({ type: 'agent.tool_start', id: 't9', name: 'shell', summary: 'Running' });
+  const quiet = console.error;
+  console.error = () => {};
+  globalThis.fetch = async () => { throw new Error('offline'); };
   await handleServerMessage({ type: 'error', code: 'tts_unavailable', message: 'Speech service is offline' });
+  console.error = quiet;
 
   assert.equal(state.awaitingAudio, false);
-  assert.equal(document.getElementById('status').innerText, 'Error: Speech service is offline');
+  assert.equal($('status').innerText, 'Speech service is offline');
+  assert.equal($('status').style.color, COLORS.error);
+  assert.equal(cards()[0].className, 'tool tool-failed');
 });
 
-test('session id is remembered for reconnects', async () => {
-  installDom();
-  resetUiRefs();
-  resetState();
-
-  await handleServerMessage({ type: 'session', session_id: 'abc123', protocol: 1, agent: 'echo' });
-
-  assert.equal(state.sessionId, 'abc123');
+test('metrics appear in the status strip', async () => {
+  reset();
+  await handleServerMessage({ type: 'metrics', stt_ms: 130, first_token_ms: 2, first_audio_ms: 876, total_ms: 912 });
+  assert.equal($('metrics').innerText, 'last turn · STT 130 ms · first audio 876 ms · total 912 ms');
 });
+
+// ------------------------------------------------------------- pairing
 
 test('#token= in the URL is saved and removed from the address bar', () => {
   installDom();

@@ -2,7 +2,7 @@
 import { COLORS, MAX_RECORDING_MS, MIME_TYPE } from "./constants.js";
 import { state } from "./state.js";
 import { setStatus, updateRecordButton } from "./ui.js";
-import { cleanupRecording, startVisualizer, stopPlayback } from "./audio.js";
+import { chime, cleanupRecording, startMicMeter, stopMeter, stopPlayback } from "./audio.js";
 import { isConnected, sendAudioChunk, sendMessage } from "./send.js";
 
 export async function startRecording() {
@@ -60,7 +60,6 @@ export async function startRecording() {
     state.analyser.fftSize = 64;
 
     source.connect(state.analyser);
-    state.dataArray = new Uint8Array(state.analyser.frequencyBinCount);
 
     const recorder = new MediaRecorder(state.microphoneStream, { mimeType: MIME_TYPE });
     state.mediaRecorder = recorder;
@@ -119,9 +118,10 @@ export async function startRecording() {
     state.isRecording = true;
     state.isStarting = false;
 
-    setStatus("Listening...");
     updateRecordButton();
-    startVisualizer();
+    updateRecordButton();
+    startMicMeter();
+    void chime("start");
 
     state.recordingTimer = setTimeout(() => {
       if (state.isRecording) {
@@ -162,12 +162,12 @@ export function stopRecording() {
   state.recordingRequested = false;
 
   clearTimeout(state.recordingTimer);
-  if (state.animationId !== null) {
-    cancelAnimationFrame(state.animationId);
+  stopMeter();
+  if (!state.discardRecording) {
+    void chime("stop");
   }
-  state.animationId = null;
 
-  setStatus("Finishing recording...");
+  setStatus("Sending…");
   updateRecordButton();
 
   if (state.mediaRecorder.state !== "inactive") {

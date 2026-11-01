@@ -108,7 +108,7 @@ def create_app(
     async def health() -> HealthReport:
         """App is up; also reports the local STT/TTS services and the agent."""
         deps = runtime.require()
-        offline: ServiceHealth = {"status": "offline", "url": ""}
+        offline: ServiceHealth = {"status": "offline", "url": "", "detail": ""}
         services = {
             "stt": await runtime.stt.health() if runtime.stt else offline,
             "tts": await runtime.tts.health() if runtime.tts else offline,

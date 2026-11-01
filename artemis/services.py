@@ -18,6 +18,8 @@ ServiceStatus = Literal["ready", "loading", "offline"]
 class ServiceHealth(TypedDict):
     status: ServiceStatus
     url: str
+    detail: str
+    """Short human-readable description, e.g. model and device."""
 
 
 class ServiceError(RuntimeError):
@@ -69,22 +71,32 @@ class _LocalService:
                 f"{self.label} service returned an error", service=self.service
             ) from error
 
+    def _detail(self, payload: dict[str, object]) -> str:
+        return str(payload.get("model", ""))
+
     async def health(self) -> ServiceHealth:
         try:
             response = await self._client.get(f"{self.base_url}/health", timeout=2.0)
             response.raise_for_status()
-            status = response.json().get("status")
-        except (httpx.HTTPError, ValueError, AttributeError):
-            return {"status": "offline", "url": self.base_url}
+            payload = response.json()
+            if not isinstance(payload, dict):
+                raise ValueError("health payload is not an object")
+        except (httpx.HTTPError, ValueError):
+            return {"status": "offline", "url": self.base_url, "detail": ""}
         return {
-            "status": "ready" if status == "ready" else "loading",
+            "status": "ready" if payload.get("status") == "ready" else "loading",
             "url": self.base_url,
+            "detail": self._detail(payload),
         }
 
 
 class SttClient(_LocalService):
     service = "stt"
     label = "Transcription"
+
+    def _detail(self, payload: dict[str, object]) -> str:
+        model = str(payload.get("model", "whisper")).removesuffix("-ready")
+        return f"{model} · {payload.get('device', '?')}"
 
     async def transcribe(self, audio: bytes) -> str:
         """Transcribe WebM/Opus bytes. Returns "" when no speech was found."""
@@ -104,6 +116,9 @@ class SttClient(_LocalService):
 class TtsClient(_LocalService):
     service = "tts"
     label = "Speech"
+
+    def _detail(self, payload: dict[str, object]) -> str:
+        return f"Kokoro · {payload.get('voice', '?')}"
 
     async def synthesize(self, text: str) -> bytes:
         """Render ``text`` to 16-bit mono WAV bytes."""

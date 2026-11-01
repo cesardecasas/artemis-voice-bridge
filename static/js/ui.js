@@ -2,45 +2,49 @@
 import { COLORS } from "./constants.js";
 import { state } from "./state.js";
 
-/** @typedef {import("./types.js").Speaker} Speaker */
 /** @typedef {import("./types.js").PipelineState} PipelineState */
+/** @typedef {PipelineState | "offline"} CoreState */
+/** @typedef {"user" | "artemis"} Speaker */
 
 /**
  * Cached DOM references (looked up lazily so tests can swap the DOM).
  * @type {{
  *   recordBtn: HTMLButtonElement | null,
+ *   core: HTMLElement | null,
+ *   title: HTMLElement | null,
  *   display: HTMLElement | null,
  *   status: HTMLElement | null,
  *   visualizer: HTMLElement | null,
- *   streamingReply: HTMLElement | null,
- *   tools: Map<string, HTMLElement>,
+ *   streamingReply: { article: HTMLElement, text: HTMLElement } | null,
+ *   renderedState: CoreState | null,
  * }}
  */
 export const ui = {
   recordBtn: null,
+  core: null,
+  title: null,
   display: null,
   status: null,
   visualizer: null,
   streamingReply: null,
-  tools: new Map(),
+  renderedState: null,
 };
 
-/** @type {Record<PipelineState, string>} */
-const STATE_LABELS = {
-  idle: "Connected",
-  listening: "Listening...",
-  transcribing: "Transcribing...",
-  thinking: "Thinking...",
-  speaking: "Generating speech...",
-};
-
-const ARTEMIS_PREFIX = "Artemis: ";
+/** Title and default hint shown under the core for each state. */
+export const CORE_COPY = /** @type {Record<CoreState, [string, string]>} */ ({
+  idle: ["Standing by", "Tap the core or hold Space to talk"],
+  listening: ["Listening", "Tap the core or release Space to send"],
+  transcribing: ["Transcribing", "Whisper on the Arc B50"],
+  thinking: ["Thinking", "Working on it"],
+  speaking: ["Speaking", "Tap the core or press Esc to interrupt"],
+  offline: ["Offline", "Reconnecting…"],
+});
 
 /**
  * @param {string} id
  * @returns {HTMLElement}
  */
-function requireElement(id) {
+export function requireElement(id) {
   const element = document.getElementById(id);
   if (!element) {
     throw new Error(`Missing #${id} element`);
@@ -52,6 +56,18 @@ function requireElement(id) {
 function recordBtn() {
   ui.recordBtn ??= /** @type {HTMLButtonElement} */ (requireElement("record-btn"));
   return ui.recordBtn;
+}
+
+/** @returns {HTMLElement} */
+export function coreEl() {
+  ui.core ??= requireElement("core");
+  return ui.core;
+}
+
+/** @returns {HTMLElement} */
+function titleEl() {
+  ui.title ??= requireElement("state-title");
+  return ui.title;
 }
 
 /** @returns {HTMLElement} */
@@ -73,6 +89,20 @@ export function visualizerEl() {
 }
 
 /**
+ * What the core should show. Local activity (recording, playback) wins over
+ * the server's pipeline state, because it is what the user is experiencing.
+ * @returns {CoreState}
+ */
+export function effectiveState() {
+  if (!state.connected) return "offline";
+  if (state.isRecording || state.isStarting) return "listening";
+  if (state.currentAudio || state.awaitingAudio) return "speaking";
+  return state.serverState;
+}
+
+/**
+ * Show a message in the hint line under the core. It stays until the core
+ * changes state or another message replaces it.
  * @param {string} message
  * @param {string} [color]
  */
@@ -82,49 +112,63 @@ export function setStatus(message, color = COLORS.neutral) {
   element.style.color = color;
 }
 
-/** @param {PipelineState} value */
-export function showPipelineState(value) {
-  setStatus(STATE_LABELS[value], value === "idle" ? COLORS.ready : COLORS.busy);
-}
+/** Re-render the core (state class, title, default hint) from current state. */
+export function renderCore() {
+  const value = effectiveState();
+  if (value === ui.renderedState) {
+    return;
+  }
+  ui.renderedState = value;
 
-/** @param {boolean} isSpeaking */
-export function setAiVoiceState(isSpeaking) {
-  if (!document.body) return;
-  document.body.classList.toggle("ai-speaking", isSpeaking);
+  const [title, hint] = CORE_COPY[value];
+  coreEl().className = `core is-${value}`;
+  titleEl().innerText = title;
+  setStatus(hint);
 }
 
 export function updateRecordButton() {
   const button = recordBtn();
   const active = state.isRecording || state.isStarting;
 
-  button.classList.toggle("recording", active);
-  // Not disabled while Artemis is busy: pressing it barges in.
-  button.disabled = state.isStopping;
-  button.setAttribute("aria-label", active ? "Stop recording" : "Start recording");
+  button.disabled = state.isStopping || !state.connected;
+  button.setAttribute("aria-label", active ? "Stop recording and send" : "Start recording");
   button.setAttribute("aria-pressed", active ? "true" : "false");
-
-  if (document.body) {
-    document.body.classList.toggle("recording", active);
-  }
+  renderCore();
 }
 
-function scrollToEnd() {
-  const container = display();
-  container.scrollTop = container.scrollHeight;
+// ------------------------------------------------------------- conversation
+
+function timeNow() {
+  return new Date().toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
 /**
- * @param {Speaker} type
+ * Append a conversation message.
+ * @param {Speaker} speaker
  * @param {string} text
- * @returns {HTMLElement}
+ * @returns {{ article: HTMLElement, text: HTMLElement }}
  */
-export function appendMessage(type, text) {
-  const div = document.createElement("div");
-  div.className = `message ${type}`;
-  div.innerText = text;
-  display().appendChild(div);
-  scrollToEnd();
-  return div;
+export function appendMessage(speaker, text) {
+  const article = document.createElement("article");
+  article.className = `msg msg-${speaker}`;
+
+  const role = document.createElement("div");
+  role.className = "msg-role";
+  const who = document.createElement("span");
+  who.innerText = speaker === "user" ? "You" : "Artemis";
+  const time = document.createElement("time");
+  time.innerText = timeNow();
+  role.append(who, time);
+
+  const body = document.createElement("p");
+  body.className = "msg-text";
+  body.innerText = text;
+
+  article.append(role, body);
+  const container = display();
+  container.appendChild(article);
+  container.scrollTop = container.scrollHeight;
+  return { article, text: body };
 }
 
 /**
@@ -132,9 +176,13 @@ export function appendMessage(type, text) {
  * @param {string} token
  */
 export function appendReplyToken(token) {
-  ui.streamingReply ??= appendMessage("artemis", ARTEMIS_PREFIX);
-  ui.streamingReply.innerText += token;
-  scrollToEnd();
+  if (!ui.streamingReply) {
+    ui.streamingReply = appendMessage("artemis", "");
+    ui.streamingReply.article.classList.add("msg-streaming");
+  }
+  ui.streamingReply.text.innerText += token;
+  const container = display();
+  container.scrollTop = container.scrollHeight;
 }
 
 /**
@@ -143,70 +191,43 @@ export function appendReplyToken(token) {
  */
 export function finishReply(text) {
   if (ui.streamingReply) {
-    ui.streamingReply.innerText = `${ARTEMIS_PREFIX}${text}`;
+    ui.streamingReply.text.innerText = text;
+    ui.streamingReply.article.classList.remove("msg-streaming");
   } else if (text) {
-    appendMessage("artemis", `${ARTEMIS_PREFIX}${text}`);
+    appendMessage("artemis", text);
   }
   ui.streamingReply = null;
 }
 
-/** Abandon a partially streamed reply (interrupt/error). */
+/** Mark a partially streamed reply as cut off (interrupt/error). */
 export function abandonReply() {
   if (ui.streamingReply) {
-    ui.streamingReply.innerText += " …";
+    ui.streamingReply.article.classList.remove("msg-streaming");
+    ui.streamingReply.article.classList.add("msg-interrupted");
   }
   ui.streamingReply = null;
 }
 
-/**
- * @param {string} id
- * @param {string} summary
- */
-export function showToolStart(id, summary) {
-  ui.tools.set(id, appendMessage("tool", `⚙ ${summary}…`));
-}
+// ------------------------------------------------------------- header bits
 
-/**
- * @param {string} id
- * @param {boolean} ok
- * @param {string} summary
- */
-export function showToolEnd(id, ok, summary) {
-  const text = `${ok ? "✓" : "✗"} ${summary}`;
-  const element = ui.tools.get(id);
-  if (element) {
-    element.innerText = text;
-    ui.tools.delete(id);
-  } else {
-    appendMessage("tool", text);
+/** @param {string} sessionId */
+export function showSession(sessionId) {
+  const label = document.getElementById("session-label");
+  if (label) {
+    label.innerText = `session ${sessionId.slice(0, 4)}·${sessionId.slice(4, 8)} · local`;
   }
 }
 
-/**
- * Minimal approval prompt (a full approval card arrives in Phase 4).
- * @param {string} action
- * @param {string} detail
- * @param {(approved: boolean) => void} onDecide
- */
-export function showApproval(action, detail, onDecide) {
-  const container = appendMessage("tool", `⚠ Approval needed: ${action}\n${detail}`);
-  container.classList.add("approval");
-
-  /** @param {string} label @param {boolean} approved */
-  const makeButton = (label, approved) => {
-    const button = document.createElement("button");
-    button.type = "button";
-    button.innerText = label;
-    button.addEventListener("click", () => {
-      for (const b of container.querySelectorAll("button")) b.disabled = true;
-      container.append(approved ? "  → approved" : "  → denied");
-      onDecide(approved);
-    });
-    return button;
-  };
-
-  container.append(document.createElement("br"), makeButton("Approve", true), makeButton("Deny", false));
+/** @param {boolean} muted */
+export function showMuted(muted) {
+  const button = document.getElementById("mute-btn");
+  if (button) {
+    button.setAttribute("aria-pressed", muted ? "true" : "false");
+    button.setAttribute("aria-label", muted ? "Unmute Artemis's voice" : "Mute Artemis's voice");
+  }
 }
+
+// ------------------------------------------------------------- pairing form
 
 /**
  * Show the access-token form; `onSubmit` receives the trimmed token.
@@ -236,9 +257,7 @@ export function hideAuthForm() {
 
 /** @param {(event: MouseEvent) => void} handler */
 export function bindRecordClick(handler) {
-  const button = recordBtn();
-  button.style.touchAction = "manipulation";
-  button.addEventListener("click", (event) => {
+  recordBtn().addEventListener("click", (event) => {
     event.preventDefault();
     handler(event);
   });

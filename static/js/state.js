@@ -8,16 +8,17 @@
  *
  * @typedef {object} AppState
  * @property {WebSocket | null} socket
+ * @property {boolean} connected  WebSocket open and session established.
  * @property {string | null} sessionId  Server session; persisted so reloads keep context.
+ * @property {string} agentName  Agent backend reported by the server ("echo", "hermes").
  * @property {PipelineState} serverState  Last `state` event from the server.
  * @property {MetricsMessage | null} lastMetrics
+ * @property {boolean} muted  Don't play Artemis's voice or chimes (persisted).
  * @property {MediaRecorder | null} mediaRecorder
  * @property {MediaStream | null} microphoneStream
- * @property {AudioContext | null} audioContext
- * @property {AnalyserNode | null} analyser
- * @property {Uint8Array<ArrayBuffer> | null} dataArray
- * @property {number | null} animationId
- * @property {number | null} playbackAnimationId
+ * @property {AudioContext | null} audioContext  Mic analysis context (per recording).
+ * @property {AnalyserNode | null} analyser  Mic analyser.
+ * @property {number | null} meterId  requestAnimationFrame id of the level meter.
  * @property {ReturnType<typeof setTimeout> | undefined} recordingTimer
  * @property {ReturnType<typeof setTimeout> | undefined} reconnectTimer
  * @property {HTMLAudioElement | null} currentAudio
@@ -35,16 +36,17 @@
 /** @type {AppState} */
 export const state = {
   socket: null,
+  connected: false,
   sessionId: null,
+  agentName: "",
   serverState: "idle",
   lastMetrics: null,
+  muted: false,
   mediaRecorder: null,
   microphoneStream: null,
   audioContext: null,
   analyser: null,
-  dataArray: null,
-  animationId: null,
-  playbackAnimationId: null,
+  meterId: null,
   recordingTimer: undefined,
   reconnectTimer: undefined,
   currentAudio: null,
