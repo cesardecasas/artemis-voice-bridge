@@ -30,10 +30,15 @@
                 <span class="brand-session" id="session-label">connecting…</span>
             </div>
         </div>
+        <div class="top-actions">
+        <button class="iconbtn" id="handsfree-btn" type="button" aria-label="Turn hands-free on" aria-pressed="false" hidden title="Hands-free: say &ldquo;Artemis, &hellip;&rdquo;">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5.5 11a6.5 6.5 0 0 0 13 0"/><path d="M12 17.5V21"/><path d="M2.5 7.5c-.7 1.1-1 2.3-1 3.5s.3 2.4 1 3.5"/><path d="M21.5 7.5c.7 1.1 1 2.3 1 3.5s-.3 2.4-1 3.5"/></svg>
+        </button>
         <button class="iconbtn" id="mute-btn" type="button" aria-label="Mute Artemis's voice" aria-pressed="false">
             <svg class="icon-unmuted" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15.5 8.5a5 5 0 0 1 0 7"/><path d="M18.5 5.5a9 9 0 0 1 0 13"/></svg>
             <svg class="icon-muted" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="m16 9 6 6"/><path d="m22 9-6 6"/></svg>
         </button>
+        </div>
     </header>
 
     <section class="statusbar panel" aria-label="System status">
@@ -102,7 +107,7 @@
         <label for="text-input" class="visually-hidden">Message Artemis</label>
         <input id="text-input" type="text" placeholder="Type to Artemis…" enterkeyhint="send">
         <button class="btn btn-ready" type="submit">Send</button>
-        <div class="keys" aria-hidden="true"><span class="kbd">Space</span> hold to talk <span class="kbd">Esc</span> stop</div>
+        <div class="keys" aria-hidden="true"><span class="kbd">Space</span> hold to talk <span class="kbd">Esc</span> stop <span class="kbd">H</span> hands-free</div>
     </form>
 </div>
 

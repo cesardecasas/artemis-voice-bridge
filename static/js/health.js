@@ -10,6 +10,7 @@ import { HEALTH_POLL_MS } from "./constants.js";
  *   status: "ready" | "degraded",
  *   services: Record<"stt" | "tts", { status: SvcStatus, detail: string }>,
  *   agent: { status: SvcStatus, backend: string },
+ *   handsfree: boolean,
  * }} HealthReport
  */
 
@@ -69,6 +70,8 @@ export async function refreshHealth() {
     setService("svc-stt", stt.status, stt.status === "offline" ? "offline" : prettyModel(stt.detail));
     setService("svc-tts", tts.status, tts.status === "offline" ? "offline · text only" : tts.detail);
     setService("svc-agent", report.agent.status, agentDisplayName(report.agent.backend));
+    const handsFreeButton = document.getElementById("handsfree-btn");
+    if (handsFreeButton) handsFreeButton.hidden = !report.handsfree;
   } catch {
     for (const id of ["svc-stt", "svc-tts", "svc-agent"]) {
       setService(id, "offline", "unreachable");

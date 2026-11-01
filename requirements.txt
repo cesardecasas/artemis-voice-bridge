@@ -3,3 +3,6 @@ fastapi==0.162.0
 uvicorn[standard]==0.54.0
 httpx==0.28.1
 pydantic==2.14.2
+# Hands-free VAD (Silero, ONNX on CPU)
+numpy==2.5.4
+onnxruntime==1.31.1

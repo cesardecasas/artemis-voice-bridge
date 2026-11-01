@@ -1,10 +1,11 @@
 // @ts-check
-import { MUTED_STORAGE_KEY } from "./constants.js";
+import { HANDSFREE_STORAGE_KEY, MUTED_STORAGE_KEY } from "./constants.js";
 import { state } from "./state.js";
 import { appendMessage, bindRecordClick, requireElement, setStatus, showMuted, updateRecordButton } from "./ui.js";
 import { startRecording, stopRecording } from "./recorder.js";
 import { connect, consumeTokenFromUrl, interrupt } from "./websocket.js";
-import { stopPlayback } from "./audio.js";
+import { onPlaybackIdle, stopPlayback } from "./audio.js";
+import { notifyPlaybackIdle, setHandsFree } from "./handsfree.js";
 import { startHealthPolling } from "./health.js";
 import { sendMessage } from "./send.js";
 import { loadStored, store } from "./storage.js";
@@ -75,6 +76,13 @@ document.addEventListener("keydown", (event) => {
     if (!event.repeat) {
       beginTalking();
     }
+    return;
+  }
+
+  if (event.key.toLowerCase() === "h" && !event.repeat && !isTyping(event.target)
+      && !event.ctrlKey && !event.metaKey && !event.altKey) {
+    const button = document.getElementById("handsfree-btn");
+    if (button && !button.hidden) void setHandsFree(!state.handsFreeWanted);
   }
 });
 
@@ -118,6 +126,16 @@ requireElement("mute-btn").addEventListener("click", () => {
     stopPlayback();
   }
 });
+
+// ------------------------------------------------------------- hands-free
+
+state.handsFreeWanted = loadStored(HANDSFREE_STORAGE_KEY) === "1";
+requireElement("handsfree-btn").setAttribute("aria-pressed", state.handsFreeWanted ? "true" : "false");
+requireElement("handsfree-btn").addEventListener("click", () => {
+  void setHandsFree(!state.handsFreeWanted);
+});
+// A reply finished playing: in hands-free mode, listen for a follow-up.
+onPlaybackIdle(notifyPlaybackIdle);
 
 // ------------------------------------------------------------- boot
 

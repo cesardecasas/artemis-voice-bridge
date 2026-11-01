@@ -22,8 +22,9 @@ export function sendMessage(message) {
 }
 
 /**
- * Send a binary audio chunk (only valid between audio.start and audio.end).
- * @param {Blob} chunk
+ * Send binary audio: a WebM chunk (between audio.start and audio.end) or a
+ * hands-free PCM16 frame (after handsfree.start).
+ * @param {Blob | ArrayBuffer} chunk
  * @returns {boolean}
  */
 export function sendAudioChunk(chunk) {

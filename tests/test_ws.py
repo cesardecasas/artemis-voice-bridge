@@ -29,7 +29,7 @@ class FakeStt:
         self.fail = fail
         self.calls: list[bytes] = []
 
-    async def transcribe(self, audio: bytes) -> str:
+    async def transcribe(self, audio: bytes, *, wav: bool = False) -> str:
         self.calls.append(audio)
         if self.fail:
             raise ServiceError("Transcription service is offline", service="stt")
@@ -75,6 +75,7 @@ def make_client(
     access_token: str = "",
     turns_per_minute: int = 30,
     max_connections: int = 4,
+    vad: Any = None,
 ) -> TestClient:
     deps = VoiceDeps(
         stt=stt or FakeStt(),
@@ -84,6 +85,7 @@ def make_client(
         max_audio_bytes=max_audio_bytes,
         access_token=access_token,
         turns_per_minute=turns_per_minute,
+        vad=vad,
     )
     base = get_settings()
     settings = dataclasses.replace(
@@ -504,3 +506,36 @@ def test_tts_failure_keeps_the_text_reply() -> None:
     assert tts.calls == ["First sentence here."], "stops trying after the first failure"
     error = next(f for f in frames if isinstance(f, dict) and f["type"] == "error")
     assert error["code"] == "tts_unavailable"
+
+
+# ---------------------------------------------------------------- Phase 7: hands-free
+
+
+def test_handsfree_needs_the_vad_model(client: TestClient) -> None:
+    with client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "handsfree.start", "format": "pcm16", "sample_rate": 16000})
+        error = recv(ws)
+    assert isinstance(error, dict) and error["code"] == "handsfree_unavailable"
+
+
+def test_handsfree_wake_word_turn_over_the_socket() -> None:
+    from tests.test_handsfree import UTTERANCE, LoudnessVad
+
+    stt = FakeStt("Artemis, hello there.")
+    with make_client(stt=stt, vad=LoudnessVad()) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "handsfree.start", "format": "pcm16", "sample_rate": 16000})
+        assert recv(ws) == {"type": "handsfree", "status": "armed", "reason": "started"}
+
+        ws.send_bytes(UTTERANCE)  # raw PCM, no audio.start: hands-free
+        frames = recv_until(ws)
+
+        ws.send_json({"type": "handsfree.stop"})
+        assert recv(ws) == {"type": "handsfree", "status": "off", "reason": "stopped"}
+
+    assert frames[0] == {"type": "handsfree", "status": "armed", "reason": "turn"}
+    assert {"type": "transcript.final", "text": "hello there."} in frames
+    metrics = next(f for f in frames if isinstance(f, dict) and f["type"] == "metrics")
+    assert metrics["stt_ms"] is not None, "hands-free STT time is reported"
+    assert stt.calls and stt.calls[0][:4] == b"RIFF", "segments go to STT as WAV"

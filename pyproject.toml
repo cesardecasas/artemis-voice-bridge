@@ -11,5 +11,5 @@ pretty = true
 
 # Third-party packages that ship without type information.
 [[tool.mypy.overrides]]
-module = ["av.*", "openvino_genai.*", "kokoro_onnx.*", "soundfile.*"]
+module = ["av.*", "openvino_genai.*", "kokoro_onnx.*", "soundfile.*", "onnxruntime.*"]
 ignore_missing_imports = true

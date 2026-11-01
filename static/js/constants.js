@@ -14,6 +14,7 @@ export const MAX_ACTIVITY_ITEMS = 40;
 export const SESSION_STORAGE_KEY = "artemis.session_id";
 export const TOKEN_STORAGE_KEY = "artemis.access_token";
 export const MUTED_STORAGE_KEY = "artemis.muted";
+export const HANDSFREE_STORAGE_KEY = "artemis.handsfree";
 
 /** WebSocket close codes used by the server (see artemis/protocol.py). */
 export const CLOSE_CODES = {

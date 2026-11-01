@@ -188,12 +188,14 @@ Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital m
 
 ## Phase 7: Hands-free
 
-- [ ] **Voice activity detection:** Silero VAD (ONNX, local) stops recording automatically when you stop talking
-- [ ] **Hands-free mode:** after Artemis finishes speaking, listen again for a few seconds for a follow-up
-- [ ] **Wake word "Artemis":** openWakeWord with a custom-trained "Artemis" model, stored locally
-- [ ] Voice approvals ("approve" / "deny") for approval requests
+- [x] **Voice activity detection:** Silero VAD (ONNX, local) stops recording automatically when you stop talking
+- [x] **Hands-free mode:** after Artemis finishes speaking, listen again for a few seconds for a follow-up
+- [x] **Wake word "Artemis":** ~~openWakeWord with a custom-trained model~~ matched on Whisper transcripts of VAD segments instead: no training run (tens of GB of data), no extra model, any name works
+- [x] Voice approvals ("approve" / "deny") for approval requests
 
 **Done when:** you can say "Artemis, …" across the room with no clicks.
+
+> **Status (2026-11-01):** done and verified live with a simulated voice (Kokoro audio streamed as PCM) through real Silero, Whisper and Hermes. Not yet tried with a real microphone across a room: VAD sensitivity (`ARTEMIS_VAD_SILENCE_MS`) and Whisper accuracy on far-field audio may need tuning. If Whisper-based wake detection turns out too GPU-hungry with a TV on, openWakeWord remains an option.
 
 ---
 

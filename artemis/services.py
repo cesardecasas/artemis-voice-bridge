@@ -98,12 +98,13 @@ class SttClient(_LocalService):
         model = str(payload.get("model", "whisper")).removesuffix("-ready")
         return f"{model} · {payload.get('device', '?')}"
 
-    async def transcribe(self, audio: bytes) -> str:
-        """Transcribe WebM/Opus bytes. Returns "" when no speech was found."""
-        response = await self._post(
-            "/transcribe",
-            files={"file": ("recording.webm", audio, "audio/webm")},
-        )
+    async def transcribe(self, audio: bytes, *, wav: bool = False) -> str:
+        """Transcribe WebM/Opus (push-to-talk) or WAV (hands-free) bytes.
+
+        Returns "" when no speech was found.
+        """
+        upload = ("segment.wav", audio, "audio/wav") if wav else ("recording.webm", audio, "audio/webm")
+        response = await self._post("/transcribe", files={"file": upload})
         try:
             text = response.json().get("text", "")
         except (ValueError, AttributeError) as error:

@@ -493,3 +493,82 @@ test('URLs without a token are left alone', () => {
 
   assert.equal(replaced, false);
 });
+
+// ------------------------------------------------------------- Phase 7: hands-free
+
+const { onPlaybackIdle } = await import('../static/js/audio.js');
+const { notifyPlaybackIdle } = await import('../static/js/handsfree.js');
+onPlaybackIdle(notifyPlaybackIdle); // as main.js wires it
+
+const sentTypes = () => state.socket.sent.map((s) => JSON.parse(s).type);
+
+function handsFreeReset() {
+  reset();
+  state.socket = new WebSocket('ws://x');
+  state.handsFree = 'armed';
+  state.suppressFollowUp = false;
+}
+
+test('hands-free status drives the core and the hint', async () => {
+  handsFreeReset();
+  await handleServerMessage({ type: 'handsfree', status: 'armed', reason: 'started' });
+  assert.equal($('core').className, 'core is-idle');
+  assert.match($('status').innerText, /Artemis/);
+
+  await handleServerMessage({ type: 'handsfree', status: 'listening', reason: 'follow_up' });
+  assert.equal($('core').className, 'core is-listening');
+  assert.match($('status').innerText, /listening/);
+});
+
+test('a reply that finishes playing opens the follow-up window', async () => {
+  handsFreeReset();
+  await handleServerMessage({ type: 'state', value: 'speaking' });
+  await handleServerMessage(chunk(0, 1));
+  await handleAudioFrame(wav(1));
+  await handleServerMessage({ type: 'state', value: 'idle' });
+  assert.ok(!sentTypes().includes('playback.idle'), 'not while audio is still playing');
+
+  globalThis.__sources[0].finish();
+  assert.deepEqual(sentTypes().filter((t) => t === 'playback.idle'), ['playback.idle']);
+});
+
+test('a text-only reply (muted) opens the follow-up window when the turn ends', async () => {
+  handsFreeReset();
+  state.muted = true;
+  await handleServerMessage({ type: 'state', value: 'thinking' });
+  await handleServerMessage({ type: 'state', value: 'idle' });
+  assert.ok(sentTypes().includes('playback.idle'));
+});
+
+test('an interrupted reply does not open the follow-up window', async () => {
+  handsFreeReset();
+  await handleServerMessage({ type: 'state', value: 'speaking' });
+  await handleServerMessage(chunk(0, 1));
+  await handleAudioFrame(wav(1));
+  await handleServerMessage({ type: 'notice', code: 'interrupted', message: 'Interrupted' });
+  await handleServerMessage({ type: 'state', value: 'idle' });
+
+  assert.ok(globalThis.__sources[0].stopped, 'voice "Artemis, stop" silences playback');
+  assert.ok(!sentTypes().includes('playback.idle'));
+});
+
+test('without hands-free, nothing extra is sent', async () => {
+  handsFreeReset();
+  state.handsFree = 'off';
+  await handleServerMessage({ type: 'state', value: 'thinking' });
+  await handleServerMessage({ type: 'state', value: 'idle' });
+  assert.deepEqual(sentTypes(), []);
+});
+
+test('an approval answered by voice settles its card without a second answer', async () => {
+  handsFreeReset();
+  await handleServerMessage({ type: 'agent.approval_request', id: 'a9', action: 'Restart Plex', detail: 'systemctl restart plex' });
+  const card = cards()[0];
+  assert.match(card.text, /say .approve/, 'card mentions voice answers');
+
+  await handleServerMessage({ type: 'approval.resolved', id: 'a9', approved: false });
+
+  assert.ok(card.classList.contains('approval-denied'));
+  assert.match(card.querySelector('approval-result').innerText, /Denied by voice/);
+  assert.ok(!sentTypes().includes('approval.response'), 'the server already has the answer');
+});

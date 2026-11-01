@@ -80,6 +80,7 @@ Models live in `models/` (git-ignored). Download them once; after that everythin
 | Whisper Large-v3-Turbo (OpenVINO IR) | `models/whisper-large-v3-turbo-ready/` | OpenVINO export of `openai/whisper-large-v3-turbo` |
 | Kokoro-82M v1.0 (ONNX) | `models/kokoro/kokoro-v1.0.onnx` | [kokoro-onnx releases, `model-files-v1.0`](https://github.com/thewh1teagle/kokoro-onnx/releases/tag/model-files-v1.0) |
 | Kokoro voice pack | `models/kokoro/voices-v1.0.bin` | same release |
+| Silero VAD v5 (ONNX, 2.3 MB, hands-free only) | `models/silero/silero_vad.onnx` | [snakers4/silero-vad `v5.1.2`](https://github.com/snakers4/silero-vad/tree/v5.1.2) |
 
 ```bash
 mkdir -p models/kokoro && cd models/kokoro
@@ -92,6 +93,14 @@ SHA-256 checksums of the files in use:
 ```
 7d5df8ecf7d4b1878015a32686053fd0eebe2bc377234608764cc0ef3636a6c5  kokoro-v1.0.onnx
 bca610b8308e8d99f32e6fe4197e7ec01679264efed0cac9140fe9c29f1fbf7d  voices-v1.0.bin
+```
+
+Silero VAD (for hands-free mode; without it the hands-free button is hidden):
+
+```bash
+mkdir -p models/silero && curl -fL -o models/silero/silero_vad.onnx \
+  https://raw.githubusercontent.com/snakers4/silero-vad/v5.1.2/src/silero_vad/data/silero_vad.onnx
+# 2623a2953f6ff3d2c1e61740c6cdb7168133479b267dfef114a4a3cc5bdd788f  silero_vad.onnx
 ```
 
 Kokoro's phonemizer uses the espeak-ng library bundled in the `espeakng-loader` wheel, so no system package is needed.
@@ -123,6 +132,10 @@ All settings live in `.env` and are read by [`artemis/config.py`](artemis/config
 | `ARTEMIS_HERMES_KEY` | *(empty)* | Same value as `API_SERVER_KEY` in `~/.hermes/.env` |
 | `ARTEMIS_HERMES_REASONING` | `off` | Hidden reasoning for voice turns: `off`, `low`, `medium`, `high`, `default` (= Hermes config). `off` answers about 8× sooner with Gemma 4 |
 | `ARTEMIS_HERMES_INSTRUCTIONS` | *(built-in)* | Replaces the voice instructions sent with every Hermes run |
+| `ARTEMIS_WAKE_WORD` | `artemis` | Hands-free wake word (matched on Whisper transcripts, so any name works) |
+| `ARTEMIS_FOLLOW_UP_S` | `8` | After a reply finishes, how long a follow-up needs no wake word |
+| `ARTEMIS_VAD_SILENCE_MS` | `700` | Silence that ends what you're saying. Lower is snappier; raise it if you get cut off mid-thought |
+| `ARTEMIS_VAD_MODEL` | `models/silero/silero_vad.onnx` | Silero VAD model |
 
 See [`.env.example`](.env.example) for the full list.
 
@@ -156,6 +169,16 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 | Cancel a recording | **Esc** (the audio is discarded) |
 | Type instead | The box at the bottom (Enter to send) |
 | Mute the voice | Speaker button, top right (remembered per device) |
+| Hands-free on/off | Mic button, top right, or **H** (remembered per device) |
+
+**Hands-free mode** keeps the mic open and you just talk:
+
+- **"Artemis, what's on my calendar?"** Wake word and question in one sentence.
+- **"Artemis."** … *(chime)* … **"what's on my calendar?"** works too.
+- **Follow-ups need no wake word** for 8 s after Artemis finishes: "And tomorrow?"
+- While Artemis is talking: **"Artemis, stop"** interrupts, and **"Artemis, <new question>"** cuts in.
+- Approval cards can be answered out loud: **"approve"** / **"yes, do it"** or **"deny"** / **"no"**.
+- Everything else said in the room is ignored. The server detects speech with Silero VAD and transcribes each phrase with the local Whisper; a phrase that doesn't start with "Artemis" is dropped and never logged or stored.
 
 The core's color tells you what Artemis is doing: **green** standing by, **cyan** listening, **blue** transcribing, **dusk** thinking, **silver** speaking, grey offline. Amber is reserved for approval requests and red for errors. The status strip polls `/health` every 15 s and shows the last turn's latency.
 
@@ -202,8 +225,8 @@ phone / laptop ──https://artemis-v01──► Caddy :443 (tls internal) ─�
 Full spec with examples: **[`docs/protocol.md`](docs/protocol.md)**. In short:
 
 - Text frames carry typed JSON events; binary frames carry audio only.
-- Client → server: `hello`, `audio.start`, *(binary chunks)*, `audio.end`, `text.input`, `interrupt`, `approval.response`.
-- Server → client: `session`, `state`, `transcript.final`, `agent.token`, `agent.tool_start`/`tool_end`, `agent.approval_request`, `agent.done`, `tts.chunk` (+ one binary WAV frame), `metrics`, `notice`, `error`.
+- Client → server: `hello`, `audio.start`, *(binary chunks)*, `audio.end`, `text.input`, `interrupt`, `approval.response`, `handsfree.start`/`stop` *(then binary PCM)*, `playback.idle`.
+- Server → client: `session`, `state`, `transcript.final`, `agent.token`, `agent.tool_start`/`tool_end`, `agent.approval_request`, `agent.done`, `tts.chunk` (+ one binary WAV frame), `metrics`, `notice`, `error`, `handsfree`, `approval.resolved`.
 - The UI is driven by `state` events (`idle → listening → transcribing → thinking → speaking → idle`).
 - **Interrupting:** press **Esc** to stop Artemis or cancel a recording. Starting a new recording while Artemis is busy cancels the current turn (barge-in).
 - **Sessions:** the session id is kept in `localStorage`, so a reload or reconnect resumes the same conversation history (held in server memory, last 50 sessions).
@@ -225,6 +248,9 @@ artemis/
   services.py           SttClient / TtsClient for the local services
   session.py            In-memory sessions with conversation history
   speech.py             SentenceSplitter: streamed text → speakable sentences (strips markdown/code)
+  vad.py                Silero VAD + SpeechSegmenter: PCM stream → speech segments
+  wake.py               Wake word and spoken approve/deny, matched on transcripts
+  handsfree.py          Hands-free state machine (armed / listening / follow-up)
   agent/
     base.py             AgentBackend protocol + events (Token, ToolStart, ToolEnd, Done)
     echo.py             EchoAgent placeholder (with optional demo tool/approval events)
@@ -246,6 +272,8 @@ static/
     ui.js               Core state rendering, hint line, conversation, pairing form
     activity.js         Tool cards and approval cards (with countdown)
     health.js           Status strip: /health polling, link state, turn metrics
+    handsfree.js        Hands-free: open mic → PCM stream, status, follow-up signal
+    pcm-worklet.js      AudioWorklet: mic → 16 kHz PCM16 frames
     websocket.js        Connection, hello/session, event dispatch, interrupt()
     recorder.js         Mic, MediaRecorder, audio.start/chunks/audio.end
     audio.js            Gapless Web Audio reply queue, level meter, chimes
@@ -257,6 +285,7 @@ tests/
   test_ws.py            Backend protocol tests (pytest, fake STT/TTS/agent)
   test_speech.py        Sentence splitter tests
   test_hermes.py        HermesAgent against a fake Hermes Runs API
+  test_handsfree.py     VAD segmenter, wake word, hands-free controller
   frontend.test.js      Frontend tests (node --test, lightweight DOM mock)
 test_whisper_gpu.py     Whisper GPU benchmark
 test_tts.py             Kokoro TTS benchmark and voice audition
@@ -287,6 +316,18 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.8.0: Hands-free (Phase 7 of `PLAN.md`)
+
+- **Hands-free mode** (mic button or **H**): the browser streams 16 kHz PCM (AudioWorklet), and the server finds speech with **Silero VAD v5** (ONNX, CPU) and listens for **"Artemis"**. No clicks: "Artemis, what's two plus two?" → "Two plus two is four."
+- **Wake word without a custom model:** each speech segment is transcribed by the local Whisper (~130 ms on the B50) and must start with "Artemis" (fuzzy: "Artemus", "Hey Artemis", "OK, Artemis"). No training run, no extra model, and any name works (`ARTEMIS_WAKE_WORD`). Speech that doesn't start with the wake word is dropped and never logged.
+- **Follow-ups without the wake word** for 8 s after a reply finishes playing (`ARTEMIS_FOLLOW_UP_S`). Common Whisper non-speech transcripts ("Thank you.") are ignored in that window.
+- **Voice control while Artemis talks:** "Artemis, stop" interrupts; "Artemis, <question>" barges in. While Artemis is busy the wake word is always required, so its own voice can't trigger anything.
+- **Spoken approvals:** "approve"/"yes, do it" or "deny"/"no" answers an open approval card; the card shows "Approved by voice".
+- Protocol: `handsfree.start`/`stop`, `playback.idle`, server `handsfree` and `approval.resolved`, error `handsfree_unavailable`. `/health` reports `handsfree`.
+- Verified live with real Silero, Whisper and Hermes (user voice played by Kokoro): room chatter ignored, wake + question, "Artemis." then question, a follow-up with context ("And times three?" → "Four times three is twelve."), and the window expiring.
+- New app dependencies: `numpy`, `onnxruntime` (CPU).
+- Tests: 32 hands-free tests plus 2 WebSocket tests (89 backend), 6 frontend hands-free tests (27 frontend).
 
 ### 1.7.0: Hermes integration (Phase 6 of `PLAN.md`)
 

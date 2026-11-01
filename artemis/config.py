@@ -137,11 +137,24 @@ class AgentSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class HandsFreeSettings:
+    """Hands-free mode (Phase 7): VAD, wake word, follow-up window."""
+
+    vad_model: Path
+    wake_word: str
+    follow_up_s: float
+    """After Artemis speaks, how long a follow-up needs no wake word."""
+    silence_ms: int
+    """Silence that ends an utterance. Lower = snappier, higher = fewer cut-offs."""
+
+
+@dataclass(frozen=True, slots=True)
 class Settings:
     app: AppSettings
     stt: SttSettings
     tts: TtsSettings
     agent: AgentSettings
+    handsfree: HandsFreeSettings
 
 
 @lru_cache(maxsize=1)
@@ -205,4 +218,11 @@ def get_settings() -> Settings:
         hermes_reasoning=_str("ARTEMIS_HERMES_REASONING", "off").lower(),
     )
 
-    return Settings(app=app, stt=stt, tts=tts, agent=agent)
+    handsfree = HandsFreeSettings(
+        vad_model=_path("ARTEMIS_VAD_MODEL", BASE_DIR / "models" / "silero" / "silero_vad.onnx"),
+        wake_word=_str("ARTEMIS_WAKE_WORD", "artemis").lower(),
+        follow_up_s=_float("ARTEMIS_FOLLOW_UP_S", 8.0),
+        silence_ms=_int("ARTEMIS_VAD_SILENCE_MS", 700),
+    )
+
+    return Settings(app=app, stt=stt, tts=tts, agent=agent, handsfree=handsfree)

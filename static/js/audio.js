@@ -95,6 +95,47 @@ function runMeter(analyser, shouldRun) {
   state.meterId = requestAnimationFrame(draw);
 }
 
+/**
+ * Hands-free: drive the orb from the open mic while `shouldShow()` is true
+ * (and nothing else owns the meter). Returns a function that stops watching.
+ * @param {AnalyserNode} analyser
+ * @param {() => boolean} shouldShow
+ * @returns {() => void}
+ */
+export function watchMicLevel(analyser, shouldShow) {
+  const data = new Uint8Array(analyser.frequencyBinCount);
+  const core = coreEl();
+  const barEls = bars();
+  let frame = 0;
+  let showing = false;
+
+  const draw = () => {
+    const active = shouldShow() && !state.playing && !state.isRecording && state.meterId === null;
+    if (active) {
+      analyser.getByteFrequencyData(data);
+      let sum = 0;
+      for (const value of data) sum += value;
+      core.style.setProperty("--level", Math.min(1, sum / data.length / 140).toFixed(3));
+      const half = barEls.length / 2;
+      for (let index = 0; index < barEls.length; index += 1) {
+        const value = data[Math.floor((Math.abs(index - half + 0.5) / half) * (data.length - 1))] ?? 0;
+        barEls[index].style.height = `${Math.max(5, 5 + (value / 255) * 44)}px`;
+      }
+      showing = true;
+    } else if (showing) {
+      showing = false;
+      if (state.meterId === null) stopMeter();
+    }
+    frame = requestAnimationFrame(draw);
+  };
+
+  frame = requestAnimationFrame(draw);
+  return () => {
+    cancelAnimationFrame(frame);
+    if (showing && state.meterId === null) stopMeter();
+  };
+}
+
 /** Start the mic meter for the current recording. */
 export function startMicMeter() {
   if (state.analyser) {
@@ -172,10 +213,25 @@ function playbackAnalyser(ctx) {
   return playback.analyser;
 }
 
-function onQueueDrained() {
+/** @type {() => void} */
+let playbackIdleHandler = () => {};
+
+/**
+ * Called when a reply finishes playing on its own (not when it is interrupted).
+ * @param {() => void} handler
+ */
+export function onPlaybackIdle(handler) {
+  playbackIdleHandler = handler;
+}
+
+/** @param {boolean} [finished]  false when playback was cut off */
+function onQueueDrained(finished = true) {
   state.playing = false;
   stopMeter();
   renderCore();
+  if (finished) {
+    playbackIdleHandler();
+  }
 }
 
 /** Stop the reply and drop everything queued (interrupt / barge-in / mute). */
@@ -193,7 +249,7 @@ export function stopPlayback() {
     }
   }
   if (state.playing) {
-    onQueueDrained();
+    onQueueDrained(false);
   }
 }
 

@@ -22,10 +22,12 @@ from fastapi import FastAPI, WebSocket
 from fastapi.staticfiles import StaticFiles
 
 from artemis.agent import create_agent
-from artemis.config import BASE_DIR, Settings, get_settings
+from artemis.config import BASE_DIR, HandsFreeSettings, Settings, get_settings
+from artemis.handsfree import HandsFreeConfig
 from artemis.protocol import CLOSE_TRY_AGAIN_LATER
 from artemis.services import ServiceHealth, ServiceStatus, SttClient, TtsClient
 from artemis.session import SessionStore
+from artemis.vad import SileroVad, VadConfig, VadModel
 from artemis.ws import VoiceConnection, VoiceDeps
 
 logging.basicConfig(level=logging.INFO)
@@ -46,6 +48,8 @@ class HealthReport(TypedDict):
     sessions: int
     connections: int
     auth: bool
+    handsfree: bool
+    """Silero VAD loaded, so the HUD can offer hands-free mode."""
 
 
 class _Runtime:
@@ -66,6 +70,21 @@ class _Runtime:
 DepsOverride = Callable[[], VoiceDeps]
 
 
+def load_handsfree(cfg: HandsFreeSettings) -> tuple[VadModel | None, HandsFreeConfig]:
+    """Load Silero VAD if its model is present; hands-free stays off otherwise."""
+    config = HandsFreeConfig(
+        wake_word=cfg.wake_word,
+        follow_up_s=cfg.follow_up_s,
+        vad=VadConfig(min_silence_ms=cfg.silence_ms),
+    )
+    if not cfg.vad_model.is_file():
+        logger.warning("Hands-free unavailable: VAD model not found at %s", cfg.vad_model)
+        return None, config
+    vad = SileroVad(cfg.vad_model)
+    logger.info("Hands-free ready (wake word %r)", cfg.wake_word)
+    return vad, config
+
+
 def create_app(
     settings: Settings | None = None, deps_override: DepsOverride | None = None
 ) -> FastAPI:
@@ -84,6 +103,7 @@ def create_app(
             runtime.stt = SttClient(client, cfg.app.stt_url)
             runtime.tts = TtsClient(client, cfg.app.tts_url)
             agent = create_agent(cfg.agent, client)
+            vad, handsfree = load_handsfree(cfg.handsfree)
             runtime.deps = VoiceDeps(
                 stt=runtime.stt,
                 tts=runtime.tts,
@@ -92,6 +112,8 @@ def create_app(
                 max_audio_bytes=cfg.app.max_audio_bytes,
                 access_token=cfg.app.access_token,
                 turns_per_minute=cfg.app.turns_per_minute,
+                vad=vad,
+                handsfree=handsfree,
             )
             logger.info("Agent backend: %s", agent.name)
             if not cfg.app.access_token:
@@ -124,6 +146,7 @@ def create_app(
             "sessions": len(deps.sessions),
             "connections": runtime.connections,
             "auth": bool(deps.access_token),
+            "handsfree": deps.vad is not None,
         }
 
     @app.websocket("/ws")

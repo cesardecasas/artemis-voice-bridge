@@ -4,7 +4,7 @@ The browser and the voice app talk over a single WebSocket at `/ws`.
 
 - **Text frames** carry JSON events with a `type` field.
 - **Binary frames** carry audio only:
-  - client → server: WebM/Opus chunks, only between `audio.start` and `audio.end`
+  - client → server: WebM/Opus chunks between `audio.start` and `audio.end` (push-to-talk); otherwise, after `handsfree.start`, a continuous stream of 16 kHz mono PCM16 frames (hands-free)
   - server → client: exactly one WAV frame, immediately after each `tts.chunk` event
 
 Source of truth: [`artemis/protocol.py`](../artemis/protocol.py) (Python `TypedDict`s and the client-message validator). The frontend mirror is [`static/js/types.js`](../static/js/types.js). Keep all three in sync; `mypy` and `tsc` catch drift within each side.
@@ -22,6 +22,9 @@ Source of truth: [`artemis/protocol.py`](../artemis/protocol.py) (Python `TypedD
 | `text.input` | `text: string` | Typed input; skips STT. Also cancels any turn in progress |
 | `interrupt` | — | Stop: cancels the running turn and discards any open recording |
 | `approval.response` | `id: string`, `approved: boolean` | Answer to an `agent.approval_request` |
+| `handsfree.start` | `format: "pcm16"`, `sample_rate: 16000` | Start hands-free: binary frames outside a recording are now little-endian PCM16 at 16 kHz (any frame size; the browser sends 100 ms). Fails with `handsfree_unavailable` if the VAD model is missing |
+| `handsfree.stop` | — | Stop hands-free |
+| `playback.idle` | — | Artemis's reply finished playing (not sent when it was interrupted). Opens the follow-up window |
 
 Malformed messages get `error` with code `bad_request`; the connection stays open.
 
@@ -40,7 +43,9 @@ Malformed messages get `error` with code `bad_request`; the connection stays ope
 | `tts.chunk` | `seq`, `final`, `format: "wav"`, `bytes` | **One binary WAV frame follows immediately.** One chunk per sentence, `seq` counting from 0; play them back to back in order |
 | `metrics` | `stt_ms`, `first_token_ms`, `first_audio_ms`, `total_ms` | Timings for the turn, measured from the turn's start |
 | `notice` | `code: no_speech \| empty_recording \| interrupted`, `message` | Informational outcome; not an error |
-| `error` | `code: unauthorized \| rate_limited \| bad_request \| too_large \| stt_unavailable \| tts_unavailable \| agent_error \| internal`, `message` | Something failed. `message` is safe to show the user |
+| `error` | `code: unauthorized \| rate_limited \| bad_request \| too_large \| stt_unavailable \| tts_unavailable \| agent_error \| handsfree_unavailable \| internal`, `message` | Something failed. `message` is safe to show the user |
+| `handsfree` | `status: off \| armed \| listening`, `reason` | Hands-free state. `armed`: waiting for the wake word. `listening`: no wake word needed (after "Artemis." alone, `reason: wake`; or the follow-up window, `reason: follow_up`). Other reasons: `started`, `turn`, `timeout`, `stopped` |
+| `approval.resolved` | `id`, `approved: boolean` | An approval was answered by voice; settle its card (don't send `approval.response`) |
 
 The server always ends a turn with `state: idle`, whether it succeeds, fails or is interrupted.
 
@@ -92,6 +97,25 @@ To try it without Hermes, set `ARTEMIS_ECHO_DEMO=true` and say or type something
 
 ---
 
+## Hands-free
+
+```
+→ {"type":"handsfree.start","format":"pcm16","sample_rate":16000}
+← {"type":"handsfree","status":"armed","reason":"started"}
+→ (binary PCM frames, continuously)          user: "Artemis, what's two plus two?"
+← {"type":"handsfree","status":"armed","reason":"turn"}
+← {"type":"transcript.final","text":"what's 2 plus 2?"}   … normal turn …
+→ {"type":"playback.idle"}                   reply finished playing
+← {"type":"handsfree","status":"listening","reason":"follow_up"}
+                                             user: "And times three?" (no wake word)
+← … turn …
+← {"type":"handsfree","status":"armed","reason":"timeout"}  8 s later, if nothing was said
+```
+
+The server segments the stream with Silero VAD, transcribes each segment with the local Whisper service, and acts only on segments that start with the wake word, except in the `listening` window. While a turn is running the wake word is always required ("Artemis, stop" interrupts; "Artemis, <question>" barges in). With an approval card open, "approve"/"yes" or "deny"/"no" answers it, and the server sends `approval.resolved`. Segments are never stored, and text without the wake word is never logged. Details: `artemis/handsfree.py`.
+
+---
+
 ## Authentication and limits
 
 When `ARTEMIS_ACCESS_TOKEN` is set:
@@ -111,6 +135,6 @@ Each connection may start at most `ARTEMIS_TURNS_PER_MINUTE` turns per rolling m
 
 ---
 
-## Planned (not yet implemented)
+## History
 
 - **Phase 5 (done):** multiple `tts.chunk` events per turn (one per sentence, increasing `seq`). Chunks may arrive before `agent.done`. `final: true` marks the last chunk when the server knows it at send time; if the reply ends right after a chunk was sent, no chunk carries it. The end of a turn's audio is always signalled by `state: idle`.

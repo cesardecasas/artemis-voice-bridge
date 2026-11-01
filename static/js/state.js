@@ -2,6 +2,7 @@
 
 /** @typedef {import("./types.js").PipelineState} PipelineState */
 /** @typedef {import("./types.js").MetricsMessage} MetricsMessage */
+/** @typedef {import("./types.js").HandsFreeStatus} HandsFreeStatus */
 
 /**
  * Browser runtime state shared across modules.
@@ -14,6 +15,9 @@
  * @property {PipelineState} serverState  Last `state` event from the server.
  * @property {MetricsMessage | null} lastMetrics
  * @property {boolean} muted  Don't play Artemis's voice or chimes (persisted).
+ * @property {boolean} handsFreeWanted  Hands-free switched on in this browser (persisted).
+ * @property {HandsFreeStatus} handsFree  Hands-free state reported by the server.
+ * @property {boolean} suppressFollowUp  The last turn was interrupted: don't open a follow-up window.
  * @property {MediaRecorder | null} mediaRecorder
  * @property {MediaStream | null} microphoneStream
  * @property {AudioContext | null} audioContext  Mic analysis context (per recording).
@@ -42,6 +46,9 @@ export const state = {
   serverState: "idle",
   lastMetrics: null,
   muted: false,
+  handsFreeWanted: false,
+  handsFree: "off",
+  suppressFollowUp: false,
   mediaRecorder: null,
   microphoneStream: null,
   audioContext: null,

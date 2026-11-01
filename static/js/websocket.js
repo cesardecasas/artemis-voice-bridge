@@ -20,7 +20,8 @@ import {
   showSession,
   updateRecordButton,
 } from "./ui.js";
-import { abandonTools, showApproval, showToolEnd, showToolStart } from "./activity.js";
+import { abandonTools, settleApproval, showApproval, showToolEnd, showToolStart } from "./activity.js";
+import { notifyPlaybackIdle, onDisconnect, onHandsFreeStatus, resumeHandsFree } from "./handsfree.js";
 import { chime, playAudio, stopPlayback } from "./audio.js";
 import { agentDisplayName, refreshHealth, showLink, showMetrics } from "./health.js";
 import { stopRecording } from "./recorder.js";
@@ -114,13 +115,28 @@ export async function handleServerMessage(message) {
       document.getElementById("agent-label")?.replaceChildren(agentDisplayName(message.agent));
       document.body?.classList.remove("booting");
       updateRecordButton();
+      void resumeHandsFree();
       break;
 
-    case "state":
+    case "state": {
+      const wasBusy = state.serverState !== "idle";
+      if (!wasBusy && message.value !== "idle") {
+        state.suppressFollowUp = false; // a new turn starts
+      }
       state.serverState = message.value;
       state.isProcessing = ["transcribing", "thinking", "speaking"].includes(message.value);
       renderCore();
+      if (message.value === "idle" && wasBusy) {
+        // No audio coming (muted, text-only reply): the turn is over now.
+        // Otherwise the playback queue reports idle when it drains.
+        if (state.suppressFollowUp) {
+          state.suppressFollowUp = false;
+        } else if (!state.playing && !state.awaitingAudio) {
+          notifyPlaybackIdle();
+        }
+      }
       break;
+    }
 
     case "transcript.final":
       appendMessage("user", message.text);
@@ -140,7 +156,7 @@ export async function handleServerMessage(message) {
 
     case "agent.approval_request":
       void chime("start");
-      showApproval(message.action, message.detail, (approved) => {
+      showApproval(message.id, message.action, message.detail, (approved) => {
         sendMessage({ type: "approval.response", id: message.id, approved });
       });
       break;
@@ -162,6 +178,10 @@ export async function handleServerMessage(message) {
 
     case "notice":
       if (message.code === "interrupted") {
+        // Also when interrupted by voice ("Artemis, stop"): silence the reply here.
+        state.suppressFollowUp = true;
+        stopPlayback();
+        state.awaitingAudio = false;
         abandonReply();
         abandonTools();
       }
@@ -181,6 +201,14 @@ export async function handleServerMessage(message) {
       }
       break;
 
+    case "handsfree":
+      onHandsFreeStatus(message.status, message.reason);
+      break;
+
+    case "approval.resolved":
+      settleApproval(message.id, message.approved);
+      break;
+
     default: {
       /** @type {never} */
       const unknown = message;
@@ -191,6 +219,7 @@ export async function handleServerMessage(message) {
 
 function markDisconnected() {
   state.connected = false;
+  onDisconnect();
   state.isProcessing = false;
   state.awaitingAudio = false;
   state.serverState = "idle";

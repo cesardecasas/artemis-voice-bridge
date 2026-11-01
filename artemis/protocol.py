@@ -30,8 +30,12 @@ ErrorCode = Literal[
     "stt_unavailable",
     "tts_unavailable",
     "agent_error",
+    "handsfree_unavailable",
     "internal",
 ]
+
+HandsFreeStatus = Literal["off", "armed", "listening"]
+"""armed = waiting for the wake word; listening = no wake word needed right now."""
 
 NoticeCode = Literal["no_speech", "empty_recording", "interrupted"]
 
@@ -72,6 +76,24 @@ class ApprovalResponseMessage(TypedDict):
     approved: bool
 
 
+class HandsFreeStartMessage(TypedDict):
+    """Start hands-free: binary frames are now 16 kHz mono PCM16 (little-endian)."""
+
+    type: Literal["handsfree.start"]
+    format: Literal["pcm16"]
+    sample_rate: Literal[16000]
+
+
+class HandsFreeStopMessage(TypedDict):
+    type: Literal["handsfree.stop"]
+
+
+class PlaybackIdleMessage(TypedDict):
+    """The client finished playing Artemis's reply (opens the follow-up window)."""
+
+    type: Literal["playback.idle"]
+
+
 ClientMessage = (
     HelloMessage
     | AudioStartMessage
@@ -79,6 +101,9 @@ ClientMessage = (
     | TextInputMessage
     | InterruptMessage
     | ApprovalResponseMessage
+    | HandsFreeStartMessage
+    | HandsFreeStopMessage
+    | PlaybackIdleMessage
 )
 
 
@@ -167,6 +192,21 @@ class ErrorMessage(TypedDict):
     message: str
 
 
+class HandsFreeMessage(TypedDict):
+    type: Literal["handsfree"]
+    status: HandsFreeStatus
+    reason: str
+    """Why it changed: started, wake, follow_up, timeout, turn, stopped, stop."""
+
+
+class ApprovalResolvedMessage(TypedDict):
+    """An approval was answered some other way (by voice): settle its card."""
+
+    type: Literal["approval.resolved"]
+    id: str
+    approved: bool
+
+
 ServerMessage = (
     SessionMessage
     | StateMessage
@@ -180,6 +220,8 @@ ServerMessage = (
     | MetricsMessage
     | NoticeMessage
     | ErrorMessage
+    | HandsFreeMessage
+    | ApprovalResolvedMessage
 )
 
 
@@ -240,6 +282,17 @@ def parse_client_message(data: object) -> ClientMessage:
                 "id": _require_str(data, "id"),
                 "approved": approved,
             }
+
+        case "handsfree.start":
+            if data.get("format", "pcm16") != "pcm16" or data.get("sample_rate", 16000) != 16000:
+                raise ProtocolError("Hands-free audio must be pcm16 at 16000 Hz")
+            return {"type": "handsfree.start", "format": "pcm16", "sample_rate": 16000}
+
+        case "handsfree.stop":
+            return {"type": "handsfree.stop"}
+
+        case "playback.idle":
+            return {"type": "playback.idle"}
 
         case _:
             raise ProtocolError(f"Unknown message type {kind!r}")

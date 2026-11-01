@@ -7,8 +7,10 @@
  */
 
 /** @typedef {"idle" | "listening" | "transcribing" | "thinking" | "speaking"} PipelineState */
-/** @typedef {"unauthorized" | "rate_limited" | "bad_request" | "too_large" | "stt_unavailable" | "tts_unavailable" | "agent_error" | "internal"} ErrorCode */
+/** @typedef {"unauthorized" | "rate_limited" | "bad_request" | "too_large" | "stt_unavailable" | "tts_unavailable" | "agent_error" | "handsfree_unavailable" | "internal"} ErrorCode */
 /** @typedef {"no_speech" | "empty_recording" | "interrupted"} NoticeCode */
+/** armed = waiting for the wake word; listening = no wake word needed right now. */
+/** @typedef {"off" | "armed" | "listening"} HandsFreeStatus */
 
 // ---------------------------------------------------------------- client -> server
 
@@ -18,10 +20,16 @@
 /** @typedef {{ type: "text.input", text: string }} TextInputMessage */
 /** @typedef {{ type: "interrupt" }} InterruptMessage */
 /** @typedef {{ type: "approval.response", id: string, approved: boolean }} ApprovalResponseMessage */
+/** Binary frames are now 16 kHz mono PCM16 (little-endian). */
+/** @typedef {{ type: "handsfree.start", format: "pcm16", sample_rate: 16000 }} HandsFreeStartMessage */
+/** @typedef {{ type: "handsfree.stop" }} HandsFreeStopMessage */
+/** Artemis's reply finished playing (opens the follow-up window). */
+/** @typedef {{ type: "playback.idle" }} PlaybackIdleMessage */
 
 /**
  * @typedef {HelloMessage | AudioStartMessage | AudioEndMessage | TextInputMessage
- *   | InterruptMessage | ApprovalResponseMessage} ClientMessage
+ *   | InterruptMessage | ApprovalResponseMessage | HandsFreeStartMessage | HandsFreeStopMessage
+ *   | PlaybackIdleMessage} ClientMessage
  */
 
 // ---------------------------------------------------------------- server -> client
@@ -44,11 +52,15 @@
  */
 /** @typedef {{ type: "notice", code: NoticeCode, message: string }} NoticeMessage */
 /** @typedef {{ type: "error", code: ErrorCode, message: string }} ErrorMessage */
+/** @typedef {{ type: "handsfree", status: HandsFreeStatus, reason: string }} HandsFreeMessage */
+/** An approval was answered another way (by voice): settle its card. */
+/** @typedef {{ type: "approval.resolved", id: string, approved: boolean }} ApprovalResolvedMessage */
 
 /**
  * @typedef {SessionMessage | StateMessage | TranscriptFinalMessage | AgentTokenMessage
  *   | AgentToolStartMessage | AgentToolEndMessage | AgentApprovalRequestMessage
- *   | AgentDoneMessage | TtsChunkMessage | MetricsMessage | NoticeMessage | ErrorMessage} ServerMessage
+ *   | AgentDoneMessage | TtsChunkMessage | MetricsMessage | NoticeMessage | ErrorMessage
+ *   | HandsFreeMessage | ApprovalResolvedMessage} ServerMessage
  */
 
 /** @typedef {"user" | "artemis" | "tool"} Speaker */

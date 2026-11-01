@@ -16,7 +16,7 @@ import { state } from "./state.js";
  *   status: HTMLElement | null,
  *   visualizer: HTMLElement | null,
  *   streamingReply: { article: HTMLElement, text: HTMLElement } | null,
- *   renderedState: CoreState | null,
+ *   renderedState: string | null,
  * }}
  */
 export const ui = {
@@ -39,6 +39,19 @@ export const CORE_COPY = /** @type {Record<CoreState, [string, string]>} */ ({
   speaking: ["Speaking", "Tap the core or press Esc to interrupt"],
   offline: ["Offline", "Reconnecting…"],
 });
+
+/**
+ * Hands-free versions of the hint under the core.
+ * @param {CoreState} value
+ * @returns {string | null}
+ */
+function handsFreeHint(value) {
+  if (state.handsFree === "off") return null;
+  if (value === "idle") return "Say \u201cArtemis, \u2026\u201d or tap the core";
+  if (value === "listening" && !state.isRecording) return "Go ahead, I\u2019m listening";
+  if (value === "speaking") return "Say \u201cArtemis, stop\u201d to interrupt";
+  return null;
+}
 
 /**
  * @param {string} id
@@ -97,6 +110,7 @@ export function effectiveState() {
   if (!state.connected) return "offline";
   if (state.isRecording || state.isStarting) return "listening";
   if (state.playing || state.awaitingAudio) return "speaking";
+  if (state.serverState === "idle" && state.handsFree === "listening") return "listening";
   return state.serverState;
 }
 
@@ -115,12 +129,14 @@ export function setStatus(message, color = COLORS.neutral) {
 /** Re-render the core (state class, title, default hint) from current state. */
 export function renderCore() {
   const value = effectiveState();
-  if (value === ui.renderedState) {
+  const key = `${value}:${state.handsFree}`;
+  if (key === ui.renderedState) {
     return;
   }
-  ui.renderedState = value;
+  ui.renderedState = key;
 
-  const [title, hint] = CORE_COPY[value];
+  const [title, defaultHint] = CORE_COPY[value];
+  const hint = handsFreeHint(value) ?? defaultHint;
   coreEl().className = `core is-${value}`;
   titleEl().innerText = title;
   setStatus(hint);

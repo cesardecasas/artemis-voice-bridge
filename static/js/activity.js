@@ -1,5 +1,10 @@
 // @ts-check
 import { APPROVAL_TIMEOUT_MS, MAX_ACTIVITY_ITEMS } from "./constants.js";
+import { state } from "./state.js";
+
+/** Open approval cards by request id: settle(approved, message). */
+/** @type {Map<string, (approved: boolean, message: string) => void>} */
+const openApprovals = new Map();
 
 /** Running tool cards by id, with their start time. */
 /** @type {Map<string, { card: HTMLElement, startedAt: number, name: string }>} */
@@ -98,13 +103,23 @@ export function abandonTools() {
 // ------------------------------------------------------------- approvals
 
 /**
+ * An approval was answered by voice: settle its card without notifying the server.
+ * @param {string} id
+ * @param {boolean} approved
+ */
+export function settleApproval(id, approved) {
+  openApprovals.get(id)?.(approved, approved ? "✓ Approved by voice" : "✕ Denied by voice");
+}
+
+/**
  * Amber approval card with Approve/Deny and a countdown matching the server timeout.
+ * @param {string} id
  * @param {string} action
  * @param {string} detail
  * @param {(approved: boolean) => void} onDecide
  * @returns {HTMLElement}
  */
-export function showApproval(action, detail, onDecide) {
+export function showApproval(id, action, detail, onDecide) {
   const card = el("div", "approval");
   card.setAttribute("role", "group");
   card.setAttribute("aria-label", `Approval request: ${action}`);
@@ -121,6 +136,9 @@ export function showApproval(action, detail, onDecide) {
   approve.type = "button";
   const timer = el("span", "approval-timer");
   actions.append(deny, approve, timer);
+  if (state.handsFree !== "off") {
+    actions.append(el("div", "approval-voice", "or say \u201capprove\u201d / \u201cdeny\u201d"));
+  }
 
   card.append(head, el("div", "approval-action", action), el("div", "codeline", detail), actions);
 
@@ -143,12 +161,14 @@ export function showApproval(action, detail, onDecide) {
     clearInterval(interval);
     if (settled) return;
     settled = true;
+    openApprovals.delete(id);
     card.classList.add(approved ? "approval-approved" : "approval-denied");
     headLabel.innerText = approved ? "Approved" : "Denied";
     actions.replaceWith(el("div", "approval-result", message));
     if (notify) onDecide(approved);
   }
 
+  openApprovals.set(id, (approved, message) => settle(approved, message, false));
   approve.addEventListener("click", () => settle(true, "✓ Approved", true));
   deny.addEventListener("click", () => settle(false, "✕ Denied · Artemis will not run it", true));
 

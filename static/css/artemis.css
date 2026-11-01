@@ -119,6 +119,9 @@ button, input { font: inherit; color: inherit; }
 .iconbtn:hover { color: var(--text); border-color: var(--line-strong); }
 .iconbtn:focus-visible { outline: 2px solid var(--dusk); outline-offset: 2px; }
 .iconbtn[aria-pressed="true"] { color: var(--amber); border-color: rgba(255, 196, 92, 0.5); }
+.top-actions { display: flex; gap: 8px; }
+#handsfree-btn[aria-pressed="true"] { color: var(--ready); border-color: rgba(110, 242, 196, 0.55); box-shadow: 0 0 14px rgba(110, 242, 196, 0.25); }
+.approval-voice { width: 100%; font-size: 12px; color: var(--muted); }
 .iconbtn .icon-muted { display: none; }
 .iconbtn[aria-pressed="true"] .icon-muted { display: block; }
 .iconbtn[aria-pressed="true"] .icon-unmuted { display: none; }

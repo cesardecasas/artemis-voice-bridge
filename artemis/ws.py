@@ -29,14 +29,17 @@ from artemis.protocol import (
     PROTOCOL_VERSION,
     ClientMessage,
     ErrorCode,
+    HandsFreeStatus,
     PipelineState,
     ProtocolError,
     ServerMessage,
     TtsChunkMessage,
     parse_client_message,
 )
+from artemis.handsfree import HandsFree, HandsFreeConfig
 from artemis.services import ServiceError
 from artemis.speech import SentenceSplitter
+from artemis.vad import VadModel
 from artemis.session import Session, SessionStore
 
 logger = logging.getLogger("artemis-voice")
@@ -47,7 +50,7 @@ RATE_WINDOW_S = 60.0
 
 
 class Transcriber(Protocol):
-    async def transcribe(self, audio: bytes) -> str: ...
+    async def transcribe(self, audio: bytes, *, wav: bool = False) -> str: ...
 
 
 class Synthesizer(Protocol):
@@ -66,6 +69,9 @@ class VoiceDeps:
     access_token: str = ""
     """Required in ``hello`` when non-empty."""
     turns_per_minute: int = 30
+    vad: VadModel | None = None
+    """Silero VAD for hands-free mode; None = hands-free unavailable."""
+    handsfree: HandsFreeConfig = HandsFreeConfig()
 
 
 def _ms_since(start: float) -> int:
@@ -154,6 +160,7 @@ class VoiceConnection:
         self._approvals: dict[str, asyncio.Future[bool]] = {}
         self._turn_times: deque[float] = deque()
         self._closed = False
+        self._handsfree: HandsFree | None = None
         # With no token configured, the connection is trusted immediately.
         self.authenticated = not deps.access_token
 
@@ -198,11 +205,16 @@ class VoiceConnection:
                     break
 
                 if frame.get("bytes") is not None:
-                    if self.authenticated:
-                        self._on_audio_chunk(frame["bytes"])
+                    if not self.authenticated:
+                        pass
+                    elif self._recording is None and self._handsfree is not None:
+                        self._handsfree.feed(frame["bytes"])  # hands-free PCM
+                    else:
+                        self._on_audio_chunk(frame["bytes"])  # push-to-talk WebM
                 elif frame.get("text") is not None:
                     await self._on_text_frame(frame["text"])
         finally:
+            await self._stop_handsfree()
             await self._cancel_turn()
             for future in self._approvals.values():
                 future.cancel()
@@ -293,6 +305,73 @@ class VoiceConnection:
                 if future is not None and not future.done():
                     future.set_result(message["approved"])
 
+            case "handsfree.start":
+                if self.deps.vad is None:
+                    await self.send_error(
+                        "handsfree_unavailable",
+                        "Hands-free needs the Silero VAD model (see README, Models)",
+                    )
+                    return
+                await self._stop_handsfree(notify=False)
+                self._handsfree = HandsFree(self, self.deps.vad.stream(), self.deps.handsfree)
+                await self.send_handsfree("armed", "started")
+                logger.info("Hands-free on")
+
+            case "handsfree.stop":
+                await self._stop_handsfree()
+
+            case "playback.idle":
+                if self._handsfree is not None:
+                    await self._handsfree.playback_finished()
+
+    # ---------------------------------------------- hands-free (HandsFreeHost)
+
+    async def _stop_handsfree(self, *, notify: bool = True) -> None:
+        handsfree, self._handsfree = self._handsfree, None
+        if handsfree is None:
+            return
+        await handsfree.close()
+        logger.info("Hands-free off")
+        if notify and not self._closed:
+            try:
+                await self.send_handsfree("off", "stopped")
+            except Exception:  # socket already gone
+                pass
+
+    async def send_handsfree(self, status: HandsFreeStatus, reason: str) -> None:
+        await self.send({"type": "handsfree", "status": status, "reason": reason})
+
+    async def transcribe_segment(self, wav: bytes) -> str:
+        try:
+            return await self.deps.stt.transcribe(wav, wav=True)
+        except ServiceError as error:
+            logger.warning("Hands-free transcription failed: %s", error)
+            return ""
+
+    def turn_active(self) -> bool:
+        return self._turn is not None and not self._turn.done()
+
+    def approval_pending(self) -> bool:
+        return any(not future.done() for future in self._approvals.values())
+
+    async def resolve_approval_by_voice(self, approved: bool) -> None:
+        for approval_id, future in self._approvals.items():
+            if not future.done():
+                future.set_result(approved)
+                await self.send(
+                    {"type": "approval.resolved", "id": approval_id, "approved": approved}
+                )
+                return
+
+    async def start_voice_turn(self, text: str, stt_ms: int) -> None:
+        await self._cancel_turn()
+        await self._start_turn(text=text, stt_ms=stt_ms)
+
+    async def interrupt_turn(self) -> None:
+        if await self._cancel_turn():
+            await self.send({"type": "notice", "code": "interrupted", "message": "Interrupted"})
+        await self.send_state("idle")
+
     def _on_audio_chunk(self, data: bytes) -> None:
         if self._recording is None:
             logger.debug("Ignoring %d audio bytes outside a recording", len(data))
@@ -336,7 +415,9 @@ class VoiceConnection:
             self.session = self.deps.sessions.get_or_create(None)
         return self.session
 
-    async def _start_turn(self, *, audio: bytes | None = None, text: str | None = None) -> None:
+    async def _start_turn(
+        self, *, audio: bytes | None = None, text: str | None = None, stt_ms: int | None = None
+    ) -> None:
         if self._rate_limited():
             await self.send_error(
                 "rate_limited",
@@ -344,7 +425,7 @@ class VoiceConnection:
             )
             await self.send_state("idle")
             return
-        task = asyncio.create_task(self._run_turn(audio=audio, text=text))
+        task = asyncio.create_task(self._run_turn(audio=audio, text=text, stt_ms=stt_ms))
         task.add_done_callback(_log_task_failure)
         self._turn = task
 
@@ -385,9 +466,11 @@ class VoiceConnection:
         finally:
             self._approvals.pop(approval_id, None)
 
-    async def _run_turn(self, *, audio: bytes | None, text: str | None) -> None:
+    async def _run_turn(
+        self, *, audio: bytes | None, text: str | None, stt_ms: int | None = None
+    ) -> None:
+        """One turn. ``stt_ms`` is passed in when the text came from hands-free STT."""
         started = time.perf_counter()
-        stt_ms: int | None = None
         first_token_ms: int | None = None
         first_audio_ms: int | None = None
         session = self._session()
