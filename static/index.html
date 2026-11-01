@@ -184,6 +184,40 @@
         }
         .approval button:disabled { opacity: 0.45; cursor: default; }
 
+        .auth-form {
+            width: min(100%, 620px);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            padding: 16px 18px;
+            border: 1px solid rgba(255, 92, 122, 0.4);
+            border-radius: 16px;
+            background: var(--panel-strong);
+            color: var(--text);
+        }
+        .auth-form label { font-weight: 600; }
+        .auth-form small { color: var(--muted); }
+        .auth-row { display: flex; gap: 8px; flex-wrap: wrap; }
+        .auth-row input {
+            flex: 1 1 200px;
+            padding: 9px 12px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(0, 0, 0, 0.35);
+            color: var(--text);
+            font: inherit;
+        }
+        .auth-row button {
+            padding: 9px 18px;
+            border-radius: 10px;
+            border: 1px solid var(--border);
+            background: rgba(123, 208, 255, 0.18);
+            color: var(--text);
+            font: inherit;
+            cursor: pointer;
+        }
+        [hidden] { display: none !important; }
+
         .controls {
             display: flex;
             flex-direction: column;
@@ -342,6 +376,15 @@
     </div>
 
     <main class="voice-panel">
+        <form id="auth-form" class="auth-form" hidden autocomplete="off">
+            <label for="auth-token">Access token</label>
+            <div class="auth-row">
+                <input id="auth-token" type="password" placeholder="Paste your Artemis token" required>
+                <button type="submit">Connect</button>
+            </div>
+            <small>Find it in <code>.env</code> as <code>ARTEMIS_ACCESS_TOKEN</code>.</small>
+        </form>
+
         <div class="display-panel">
             <div id="display">
                 <div class="message artemis">Artemis: Standing by.</div>

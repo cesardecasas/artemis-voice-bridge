@@ -3,14 +3,18 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 from collections.abc import AsyncIterator, Iterator
 from typing import Any
 
 import pytest
 from fastapi.testclient import TestClient
+from starlette.websockets import WebSocketDisconnect
 from starlette.testclient import WebSocketTestSession
 
+import artemis.ws
 from artemis.agent import AgentContext, AgentEvent, Done, EchoAgent, Token
+from artemis.config import get_settings
 from artemis.services import ServiceError, ServiceStatus
 from artemis.session import SessionStore
 from artemis.ws import VoiceDeps
@@ -68,6 +72,9 @@ def make_client(
     agent: Any = None,
     sessions: SessionStore | None = None,
     max_audio_bytes: int = 1024,
+    access_token: str = "",
+    turns_per_minute: int = 30,
+    max_connections: int = 4,
 ) -> TestClient:
     deps = VoiceDeps(
         stt=stt or FakeStt(),
@@ -75,8 +82,14 @@ def make_client(
         agent=agent or EchoAgent(),
         sessions=sessions if sessions is not None else SessionStore(),
         max_audio_bytes=max_audio_bytes,
+        access_token=access_token,
+        turns_per_minute=turns_per_minute,
     )
-    return TestClient(create_app(deps_override=lambda: deps))
+    base = get_settings()
+    settings = dataclasses.replace(
+        base, app=dataclasses.replace(base.app, max_connections=max_connections)
+    )
+    return TestClient(create_app(settings=settings, deps_override=lambda: deps))
 
 
 @pytest.fixture
@@ -112,8 +125,10 @@ def types(frames: list[dict[str, Any] | bytes]) -> list[str]:
     ]
 
 
-def hello(ws: WebSocketTestSession, session_id: str | None = None) -> str:
-    ws.send_json({"type": "hello", "session_id": session_id})
+def hello(
+    ws: WebSocketTestSession, session_id: str | None = None, token: str | None = None
+) -> str:
+    ws.send_json({"type": "hello", "session_id": session_id, "token": token})
     session = recv(ws)
     assert isinstance(session, dict) and session["type"] == "session"
     assert session["protocol"] == 1
@@ -300,3 +315,81 @@ def test_session_survives_reconnect() -> None:
 def test_health_reports_agent(client: TestClient) -> None:
     body = client.get("/health").json()
     assert body["agent"] == {"status": "ready", "backend": "echo"}
+
+
+# ---------------------------------------------------------------- security
+
+TOKEN = "s3cret-token"
+
+
+def expect_close(ws: WebSocketTestSession) -> int:
+    with pytest.raises(WebSocketDisconnect) as closed:
+        while True:
+            ws.receive_json()
+    return closed.value.code
+
+
+@pytest.mark.parametrize("token", [None, "", "wrong-token"])
+def test_bad_token_is_rejected(token: str | None) -> None:
+    stt = FakeStt()
+    with make_client(stt=stt, access_token=TOKEN) as client, client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "hello", "session_id": None, "token": token})
+        error = recv(ws)
+        code = expect_close(ws)
+
+    assert isinstance(error, dict) and error["code"] == "unauthorized"
+    assert code == 4401
+
+
+def test_messages_before_hello_are_rejected_when_auth_enabled() -> None:
+    stt = FakeStt()
+    with make_client(stt=stt, access_token=TOKEN) as client, client.websocket_connect("/ws") as ws:
+        ws.send_json({"type": "text.input", "text": "sneaky"})
+        error = recv(ws)
+        code = expect_close(ws)
+
+    assert isinstance(error, dict) and error["code"] == "unauthorized"
+    assert code == 4401
+    assert stt.calls == []
+
+
+def test_correct_token_is_accepted() -> None:
+    with make_client(access_token=TOKEN) as client, client.websocket_connect("/ws") as ws:
+        hello(ws, token=TOKEN)
+        ws.send_json({"type": "text.input", "text": "hi"})
+        frames = recv_until(ws)
+
+    assert "agent.done" in types(frames)
+
+
+def test_hello_timeout_closes_connection(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(artemis.ws, "HELLO_TIMEOUT_S", 0.05)
+    with make_client(access_token=TOKEN) as client, client.websocket_connect("/ws") as ws:
+        code = expect_close(ws)
+
+    assert code == 4408
+
+
+def test_turn_rate_limit() -> None:
+    with make_client(turns_per_minute=2) as client, client.websocket_connect("/ws") as ws:
+        hello(ws)
+        for _ in range(2):
+            ws.send_json({"type": "text.input", "text": "hi"})
+            recv_until(ws)
+        ws.send_json({"type": "text.input", "text": "one too many"})
+        frames = recv_until(ws)
+
+    assert types(frames) == ["error", "state:idle"]
+    assert isinstance(frames[0], dict) and frames[0]["code"] == "rate_limited"
+
+
+def test_connection_limit() -> None:
+    with make_client(max_connections=1) as client, client.websocket_connect("/ws") as first:
+        hello(first)
+        with client.websocket_connect("/ws") as second:
+            code = expect_close(second)
+        # The first connection keeps working.
+        first.send_json({"type": "text.input", "text": "still here"})
+        assert "agent.done" in types(recv_until(first))
+
+    assert code == 1013

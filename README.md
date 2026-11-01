@@ -102,7 +102,11 @@ All settings live in `.env` and are read by [`artemis/config.py`](artemis/config
 
 | Variable | Default | Purpose |
 |---|---|---|
+| `ARTEMIS_APP_HOST` | `127.0.0.1` | Bind address. Localhost only, because Caddy proxies in |
 | `ARTEMIS_APP_PORT` | `8080` | Voice app port |
+| `ARTEMIS_ACCESS_TOKEN` | *(empty = no auth)* | Shared secret every browser must present (see "Access and security") |
+| `ARTEMIS_MAX_CONNECTIONS` | `4` | Simultaneous WebSocket connections |
+| `ARTEMIS_TURNS_PER_MINUTE` | `30` | Per-connection turn limit |
 | `ARTEMIS_STT_DEVICE` | `GPU.0` | OpenVINO device for Whisper |
 | `ARTEMIS_STT_LANGUAGE` | `en` | Whisper language; empty = auto-detect |
 | `ARTEMIS_STT_INITIAL_PROMPT` | `Artemis, Hermes.` | Names Whisper should expect (see below) |
@@ -132,13 +136,13 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 - Services that are already healthy are skipped.
 - The start script forces `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`, so nothing tries to reach a model hub.
 - Logs: `logs/voice.log`, `logs/whisper.log`, `logs/tts.log`. PIDs: `logs/*.pid`.
-- Microphone access needs HTTPS or `localhost`. The LAN URL `https://artemis-v01` is served through your HTTPS proxy.
+- Microphone access needs HTTPS or `localhost`. Use `https://artemis-v01` (Caddy) from other devices.
 
 ### Health endpoints
 
 | URL | Returns |
 |---|---|
-| `GET :8080/health` | `ready` or `degraded`, the STT/TTS service status, agent backend status, and session count |
+| `GET :8080/health` | `ready` or `degraded`, the STT/TTS service status, agent backend status, session/connection counts, whether auth is on |
 | `GET :8083/health` | Whisper status, model, device |
 | `GET :8084/health` | Kokoro status, model, default voice |
 | `GET :8084/voices` | All available voice IDs |
@@ -151,6 +155,24 @@ venv-tts/bin/python test_tts.py --voice bf_emma --out /tmp/emma.wav   # listen, 
 ```
 
 Then set `ARTEMIS_TTS_VOICE` in `.env` and restart.
+
+---
+
+## Access and security
+
+```
+phone / laptop ──https://artemis-v01──► Caddy :443 (tls internal) ──► 127.0.0.1:8080 (voice app)
+```
+
+- **The app listens on `127.0.0.1` only.** The only way in is through Caddy (`/etc/caddy/Caddyfile` → `reverse_proxy 127.0.0.1:8080`). Port 8080 is not reachable from the LAN.
+- **Access token.** `ARTEMIS_ACCESS_TOKEN` in `.env` (created with a random 32-character value; the file is `chmod 600` and git-ignored). The browser sends it in the first WebSocket message, so it never appears in URLs or logs.
+- **Pairing a device:** open `https://artemis-v01/#token=<your token>` once. The page saves the token and removes it from the address bar; the `#…` part is never sent to the server. Or just open the page and paste the token into the form that appears.
+  ```bash
+  grep ARTEMIS_ACCESS_TOKEN .env   # show your token
+  ```
+- **Rotating the token:** change it in `.env` and restart the app. Each device will show the token form again.
+- **Limits:** at most `ARTEMIS_MAX_CONNECTIONS` open connections and `ARTEMIS_TURNS_PER_MINUTE` turns per connection; a client must authenticate within 10 s.
+- `/health` and the static UI files are public (they contain no data); everything that reaches STT, TTS or the agent requires the token.
 
 ---
 
@@ -234,6 +256,15 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.4.0: Access token and limits (Phase 3c of `PLAN.md`)
+
+- **Access token:** `ARTEMIS_ACCESS_TOKEN` is required in the `hello` message (constant-time comparison), with a 10 s hello deadline. Bad or missing tokens get `error: unauthorized` and close code `4401`.
+- **Device pairing** via `https://artemis-v01/#token=…`; the fragment never reaches the server and is removed from the address bar. There's also a token form in the UI.
+- **Bound to `127.0.0.1`** (was `0.0.0.0`): only Caddy can reach the app.
+- **Limits:** max concurrent connections (close `1013`, client retries after 10 s) and a per-connection turns-per-minute limit (`error: rate_limited`).
+- `/health` reports connection count and whether auth is enabled.
+- Tests: 8 new backend security tests (23 total) and 2 frontend pairing tests (14 total). Verified end to end through Caddy over `wss://`: no token → `4401`, wrong token → `4401`, correct token → accepted. The token appears nowhere in the logs.
 
 ### 1.3.0: Typed event protocol and backend package (Phase 3a–3b of `PLAN.md`)
 

@@ -173,7 +173,7 @@ const websocketModule = await import('../static/js/websocket.js');
 const { state } = stateModule;
 const { ui, setStatus, updateRecordButton } = uiModule;
 const { startRecording } = recorderModule;
-const { handleServerMessage, handleAudioFrame, parseServerMessage } = websocketModule;
+const { handleServerMessage, handleAudioFrame, parseServerMessage, consumeTokenFromUrl } = websocketModule;
 
 function resetUiRefs() {
   ui.recordBtn = document.getElementById('record-btn');
@@ -364,4 +364,33 @@ test('session id is remembered for reconnects', async () => {
   await handleServerMessage({ type: 'session', session_id: 'abc123', protocol: 1, agent: 'echo' });
 
   assert.equal(state.sessionId, 'abc123');
+});
+
+test('#token= in the URL is saved and removed from the address bar', () => {
+  installDom();
+  const saved = new Map();
+  globalThis.localStorage = {
+    getItem: (key) => saved.get(key) ?? null,
+    setItem: (key, value) => saved.set(key, value),
+    removeItem: (key) => saved.delete(key),
+  };
+  let replacedWith = null;
+  globalThis.history = { replaceState: (_s, _t, url) => { replacedWith = url; } };
+  globalThis.window.location = { ...globalThis.window.location, hash: '#token=abc%2F123', pathname: '/', search: '' };
+
+  consumeTokenFromUrl();
+
+  assert.equal(saved.get('artemis.access_token'), 'abc/123');
+  assert.equal(replacedWith, '/');
+});
+
+test('URLs without a token are left alone', () => {
+  installDom();
+  let replaced = false;
+  globalThis.history = { replaceState: () => { replaced = true; } };
+  globalThis.window.location = { ...globalThis.window.location, hash: '', pathname: '/', search: '' };
+
+  consumeTokenFromUrl();
+
+  assert.equal(replaced, false);
 });

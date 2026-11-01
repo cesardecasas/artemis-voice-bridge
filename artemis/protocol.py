@@ -15,9 +15,16 @@ from typing import Any, Literal, NotRequired, TypedDict
 
 PROTOCOL_VERSION = 1
 
+# WebSocket close codes (4000-4999 are application-defined).
+CLOSE_UNAUTHORIZED = 4401
+CLOSE_HELLO_TIMEOUT = 4408
+CLOSE_TRY_AGAIN_LATER = 1013  # standard: server overloaded (too many connections)
+
 PipelineState = Literal["idle", "listening", "transcribing", "thinking", "speaking"]
 
 ErrorCode = Literal[
+    "unauthorized",
+    "rate_limited",
     "bad_request",
     "too_large",
     "stt_unavailable",
@@ -37,6 +44,8 @@ NoticeCode = Literal["no_speech", "empty_recording", "interrupted"]
 class HelloMessage(TypedDict):
     type: Literal["hello"]
     session_id: NotRequired[str | None]
+    token: NotRequired[str | None]
+    """Access token; required when the server has ``ARTEMIS_ACCESS_TOKEN`` set."""
 
 
 class AudioStartMessage(TypedDict):
@@ -202,7 +211,10 @@ def parse_client_message(data: object) -> ClientMessage:
             session_id = data.get("session_id")
             if session_id is not None and not isinstance(session_id, str):
                 raise ProtocolError("'session_id' must be a string or null")
-            return {"type": "hello", "session_id": session_id}
+            token = data.get("token")
+            if token is not None and not isinstance(token, str):
+                raise ProtocolError("'token' must be a string or null")
+            return {"type": "hello", "session_id": session_id, "token": token}
 
         case "audio.start":
             fmt = data.get("format", "webm/opus")

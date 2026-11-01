@@ -7,12 +7,12 @@
  */
 
 /** @typedef {"idle" | "listening" | "transcribing" | "thinking" | "speaking"} PipelineState */
-/** @typedef {"bad_request" | "too_large" | "stt_unavailable" | "tts_unavailable" | "agent_error" | "internal"} ErrorCode */
+/** @typedef {"unauthorized" | "rate_limited" | "bad_request" | "too_large" | "stt_unavailable" | "tts_unavailable" | "agent_error" | "internal"} ErrorCode */
 /** @typedef {"no_speech" | "empty_recording" | "interrupted"} NoticeCode */
 
 // ---------------------------------------------------------------- client -> server
 
-/** @typedef {{ type: "hello", session_id: string | null }} HelloMessage */
+/** @typedef {{ type: "hello", session_id: string | null, token: string | null }} HelloMessage */
 /** @typedef {{ type: "audio.start", format: "webm/opus" }} AudioStartMessage */
 /** @typedef {{ type: "audio.end" }} AudioEndMessage */
 /** @typedef {{ type: "text.input", text: string }} TextInputMessage */

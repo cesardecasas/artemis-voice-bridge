@@ -2,7 +2,7 @@
 import { state } from "./state.js";
 import { setStatus, updateRecordButton, bindRecordClick } from "./ui.js";
 import { startRecording, stopRecording } from "./recorder.js";
-import { connect, interrupt } from "./websocket.js";
+import { connect, consumeTokenFromUrl, interrupt } from "./websocket.js";
 
 bindRecordClick((event) => {
   event.preventDefault();
@@ -43,5 +43,6 @@ document.addEventListener("keydown", (event) => {
   interrupt();
 });
 
+consumeTokenFromUrl();
 updateRecordButton();
 connect();

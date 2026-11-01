@@ -10,10 +10,12 @@ cancelled on interrupt or barge-in.
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
 import logging
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -21,6 +23,8 @@ from fastapi import WebSocket
 
 from artemis.agent import AgentBackend, AgentContext, Done, Token, ToolEnd, ToolStart
 from artemis.protocol import (
+    CLOSE_HELLO_TIMEOUT,
+    CLOSE_UNAUTHORIZED,
     PROTOCOL_VERSION,
     ClientMessage,
     ErrorCode,
@@ -36,6 +40,8 @@ from artemis.session import Session, SessionStore
 logger = logging.getLogger("artemis-voice")
 
 APPROVAL_TIMEOUT_S = 120.0
+HELLO_TIMEOUT_S = 10.0
+RATE_WINDOW_S = 60.0
 
 
 class Transcriber(Protocol):
@@ -55,6 +61,9 @@ class VoiceDeps:
     agent: AgentBackend
     sessions: SessionStore
     max_audio_bytes: int
+    access_token: str = ""
+    """Required in ``hello`` when non-empty."""
+    turns_per_minute: int = 30
 
 
 def _ms_since(start: float) -> int:
@@ -72,6 +81,10 @@ class VoiceConnection:
         self._recording_too_large = False
         self._turn: asyncio.Task[None] | None = None
         self._approvals: dict[str, asyncio.Future[bool]] = {}
+        self._turn_times: deque[float] = deque()
+        self._closed = False
+        # With no token configured, the connection is trusted immediately.
+        self.authenticated = not deps.access_token
 
     # ---------------------------------------------- sending
 
@@ -93,16 +106,29 @@ class VoiceConnection:
 
     # ---------------------------------------------- receive loop
 
+    async def close(self, code: int, reason: str) -> None:
+        self._closed = True
+        await self.ws.close(code=code, reason=reason)
+
     async def run(self) -> None:
         try:
-            while True:
-                frame = await self.ws.receive()
+            while not self._closed:
+                if self.authenticated:
+                    frame = await self.ws.receive()
+                else:
+                    try:
+                        frame = await asyncio.wait_for(self.ws.receive(), HELLO_TIMEOUT_S)
+                    except TimeoutError:
+                        logger.warning("Client sent no hello within %.0fs", HELLO_TIMEOUT_S)
+                        await self.close(CLOSE_HELLO_TIMEOUT, "hello timeout")
+                        break
 
                 if frame["type"] == "websocket.disconnect":
                     break
 
                 if frame.get("bytes") is not None:
-                    self._on_audio_chunk(frame["bytes"])
+                    if self.authenticated:
+                        self._on_audio_chunk(frame["bytes"])
                 elif frame.get("text") is not None:
                     await self._on_text_frame(frame["text"])
         finally:
@@ -119,11 +145,41 @@ class VoiceConnection:
             await self.send_error("bad_request", str(error))
             return
 
+        if not self.authenticated and message["type"] != "hello":
+            await self._reject("Send hello with an access token first")
+            return
+
         await self._dispatch(message)
+
+    async def _reject(self, reason: str) -> None:
+        logger.warning("Rejected unauthenticated client: %s", reason)
+        await self.send_error("unauthorized", reason)
+        await self.close(CLOSE_UNAUTHORIZED, "unauthorized")
+
+    def _token_ok(self, token: str | None) -> bool:
+        if not self.deps.access_token:
+            return True
+        if not token:
+            return False
+        return hmac.compare_digest(token.encode(), self.deps.access_token.encode())
+
+    def _rate_limited(self) -> bool:
+        """Sliding-window limit on turns per connection."""
+        now = time.monotonic()
+        while self._turn_times and now - self._turn_times[0] > RATE_WINDOW_S:
+            self._turn_times.popleft()
+        if len(self._turn_times) >= self.deps.turns_per_minute:
+            return True
+        self._turn_times.append(now)
+        return False
 
     async def _dispatch(self, message: ClientMessage) -> None:
         match message["type"]:
             case "hello":
+                if not self._token_ok(message.get("token")):
+                    await self._reject("Invalid or missing access token")
+                    return
+                self.authenticated = True
                 self.session = self.deps.sessions.get_or_create(message.get("session_id"))
                 await self.send(
                     {
@@ -151,7 +207,7 @@ class VoiceConnection:
                     await self.send_error("bad_request", "Text is empty")
                     return
                 await self._cancel_turn()
-                self._start_turn(text=text)
+                await self._start_turn(text=text)
 
             case "interrupt":
                 self._recording = None
@@ -200,7 +256,7 @@ class VoiceConnection:
             await self.send_state("idle")
             return
 
-        self._start_turn(audio=bytes(recording))
+        await self._start_turn(audio=bytes(recording))
 
     # ---------------------------------------------- turns
 
@@ -209,7 +265,14 @@ class VoiceConnection:
             self.session = self.deps.sessions.get_or_create(None)
         return self.session
 
-    def _start_turn(self, *, audio: bytes | None = None, text: str | None = None) -> None:
+    async def _start_turn(self, *, audio: bytes | None = None, text: str | None = None) -> None:
+        if self._rate_limited():
+            await self.send_error(
+                "rate_limited",
+                f"Too many requests (limit {self.deps.turns_per_minute}/min); wait a moment",
+            )
+            await self.send_state("idle")
+            return
         task = asyncio.create_task(self._run_turn(audio=audio, text=text))
         task.add_done_callback(_log_task_failure)
         self._turn = task

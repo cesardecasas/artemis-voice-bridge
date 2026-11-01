@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from artemis.agent import create_agent
 from artemis.config import BASE_DIR, Settings, get_settings
+from artemis.protocol import CLOSE_TRY_AGAIN_LATER
 from artemis.services import ServiceHealth, ServiceStatus, SttClient, TtsClient
 from artemis.session import SessionStore
 from artemis.ws import VoiceConnection, VoiceDeps
@@ -43,6 +44,8 @@ class HealthReport(TypedDict):
     services: dict[str, ServiceHealth]
     agent: AgentHealth
     sessions: int
+    connections: int
+    auth: bool
 
 
 class _Runtime:
@@ -52,6 +55,7 @@ class _Runtime:
         self.deps: VoiceDeps | None = None
         self.stt: SttClient | None = None
         self.tts: TtsClient | None = None
+        self.connections = 0
 
     def require(self) -> VoiceDeps:
         if self.deps is None:
@@ -86,8 +90,14 @@ def create_app(
                 agent=agent,
                 sessions=SessionStore(),
                 max_audio_bytes=cfg.app.max_audio_bytes,
+                access_token=cfg.app.access_token,
+                turns_per_minute=cfg.app.turns_per_minute,
             )
             logger.info("Agent backend: %s", agent.name)
+            if not cfg.app.access_token:
+                logger.warning(
+                    "ARTEMIS_ACCESS_TOKEN is not set: anyone who can reach this app can use it"
+                )
             yield
 
         runtime.deps = None
@@ -112,18 +122,28 @@ def create_app(
             "services": services,
             "agent": agent,
             "sessions": len(deps.sessions),
+            "connections": runtime.connections,
+            "auth": bool(deps.access_token),
         }
 
     @app.websocket("/ws")
     async def websocket_endpoint(websocket: WebSocket) -> None:
         await websocket.accept()
-        logger.info("Client connected")
+
+        if runtime.connections >= cfg.app.max_connections:
+            logger.warning("Refusing connection: limit of %d reached", cfg.app.max_connections)
+            await websocket.close(code=CLOSE_TRY_AGAIN_LATER, reason="too many connections")
+            return
+
+        runtime.connections += 1
+        logger.info("Client connected (%d open)", runtime.connections)
         try:
             await VoiceConnection(websocket, runtime.require()).run()
         except Exception:
             logger.exception("WebSocket failure")
         finally:
-            logger.info("Client disconnected")
+            runtime.connections -= 1
+            logger.info("Client disconnected (%d open)", runtime.connections)
 
     app.mount("/", StaticFiles(directory=STATIC_DIR, html=True), name="static")
     return app

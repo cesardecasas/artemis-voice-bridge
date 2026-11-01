@@ -115,13 +115,13 @@ main.py            # app factory, static mounts
 - [x] Add `GET /health` on the main app that aggregates STT, TTS and agent health
 
 ### 3c. Security (required before Hermes)
-- [ ] Add a shared-secret token (from `.env`), checked on WebSocket connect; the UI stores it after a one-time entry
-- [ ] Bind to the LAN interface or `127.0.0.1` behind your existing HTTPS proxy, not blindly to `0.0.0.0`
-- [ ] Limit the number of concurrent sessions and add a per-session rate limit
+- [x] Add a shared-secret token (from `.env`), checked on WebSocket connect; the UI stores it after a one-time entry (or pair a device with `#token=` in the URL)
+- [x] Bind to the LAN interface or `127.0.0.1` behind your existing HTTPS proxy, not blindly to `0.0.0.0`: now `127.0.0.1` behind Caddy
+- [x] Limit the number of concurrent sessions and add a per-session rate limit (connections + turns/min, 10 s hello deadline)
 
 **Done when:** the app behaves as it does today, but runs on the new protocol and the `EchoAgent`, and the backend tests pass.
 
-> **Status (2026-11-01):** 3a and 3b done: 15 backend protocol tests, a verified end-to-end voice turn (0.9 s), and interrupt/barge-in working. Pulled forward from later phases: Esc to interrupt (Phase 4), barge-in on the server side (Phase 5), and minimal approval buttons (full cards in Phase 4). **3c (security) is still open**; it needs decisions on how you access the app.
+> **Status (2026-11-01):** 3a and 3b done: 15 backend protocol tests, a verified end-to-end voice turn (0.9 s), and interrupt/barge-in working. Pulled forward from later phases: Esc to interrupt (Phase 4), barge-in on the server side (Phase 5), and minimal approval buttons (full cards in Phase 4). 3c (security) done as well: token auth, localhost bind, limits. Phase 3 is complete.
 
 ---
 

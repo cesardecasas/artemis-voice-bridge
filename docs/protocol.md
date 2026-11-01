@@ -15,7 +15,7 @@ Source of truth: [`artemis/protocol.py`](../artemis/protocol.py) (Python `TypedD
 
 | `type` | Fields | Meaning |
 |---|---|---|
-| `hello` | `session_id: string \| null` | First message. Pass a saved id to resume a session's history after a reconnect or reload |
+| `hello` | `session_id: string \| null`, `token: string \| null` | First message. `token` is required when the server sets `ARTEMIS_ACCESS_TOKEN`. Pass a saved `session_id` to resume a session's history |
 | `audio.start` | `format: "webm/opus"` | Begin a recording. **Cancels any turn in progress (barge-in)** |
 | *(binary)* | — | WebM/Opus audio chunk |
 | `audio.end` | — | Recording finished; the server starts a turn |
@@ -40,7 +40,7 @@ Malformed messages get `error` with code `bad_request`; the connection stays ope
 | `tts.chunk` | `seq`, `final`, `format: "wav"`, `bytes` | **One binary WAV frame follows immediately** |
 | `metrics` | `stt_ms`, `first_token_ms`, `first_audio_ms`, `total_ms` | Timings for the turn, measured from the turn's start |
 | `notice` | `code: no_speech \| empty_recording \| interrupted`, `message` | Informational outcome; not an error |
-| `error` | `code: bad_request \| too_large \| stt_unavailable \| tts_unavailable \| agent_error \| internal`, `message` | Something failed. `message` is safe to show the user |
+| `error` | `code: unauthorized \| rate_limited \| bad_request \| too_large \| stt_unavailable \| tts_unavailable \| agent_error \| internal`, `message` | Something failed. `message` is safe to show the user |
 
 The server always ends a turn with `state: idle`, whether it succeeds, fails or is interrupted.
 
@@ -49,7 +49,7 @@ The server always ends a turn with `state: idle`, whether it succeeds, fails or 
 ## Typical voice turn
 
 ```
-→ {"type":"hello","session_id":null}
+→ {"type":"hello","session_id":null,"token":"…"}
 ← {"type":"session","session_id":"985b…","protocol":1,"agent":"echo"}
 ← {"type":"state","value":"idle"}
 
@@ -92,7 +92,25 @@ To try it without Hermes, set `ARTEMIS_ECHO_DEMO=true` and say or type something
 
 ---
 
+## Authentication and limits
+
+When `ARTEMIS_ACCESS_TOKEN` is set:
+
+- The first message must be a `hello` carrying the token, sent within **10 s**. Anything else gets `error: unauthorized` and the socket is closed.
+- The token is compared in constant time. It travels inside the encrypted WebSocket, never in the URL, so it doesn't appear in Caddy or uvicorn logs.
+
+Close codes:
+
+| Code | Meaning | Client behavior |
+|---|---|---|
+| `4401` | Missing or invalid token | Forget the stored token, show the token form, don't auto-reconnect |
+| `4408` | No `hello` within 10 s | Reconnect |
+| `1013` | Too many open connections (`ARTEMIS_MAX_CONNECTIONS`) | Retry after 10 s |
+
+Each connection may start at most `ARTEMIS_TURNS_PER_MINUTE` turns per rolling minute. Turns over the limit get `error: rate_limited` and `state: idle`.
+
+---
+
 ## Planned (not yet implemented)
 
 - **Phase 5:** multiple `tts.chunk` events per turn (one per sentence, increasing `seq`, last one `final: true`).
-- **Phase 3c:** authentication on connect.

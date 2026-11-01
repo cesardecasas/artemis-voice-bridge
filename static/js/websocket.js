@@ -1,14 +1,23 @@
 // @ts-check
-import { COLORS, CONNECTION_RETRY_MS, SESSION_STORAGE_KEY } from "./constants.js";
+import {
+  BUSY_RETRY_MS,
+  CLOSE_CODES,
+  COLORS,
+  CONNECTION_RETRY_MS,
+  SESSION_STORAGE_KEY,
+  TOKEN_STORAGE_KEY,
+} from "./constants.js";
 import { state } from "./state.js";
 import {
   abandonReply,
   appendMessage,
   appendReplyToken,
   finishReply,
+  hideAuthForm,
   setAiVoiceState,
   setStatus,
   showApproval,
+  showAuthForm,
   showPipelineState,
   showToolEnd,
   showToolStart,
@@ -20,22 +29,55 @@ import { sendMessage } from "./send.js";
 
 /** @typedef {import("./types.js").ServerMessage} ServerMessage */
 
-/** @returns {string | null} */
-function loadSessionId() {
+/**
+ * @param {string} key
+ * @returns {string | null}
+ */
+function loadStored(key) {
   try {
-    return localStorage.getItem(SESSION_STORAGE_KEY);
+    return localStorage.getItem(key);
   } catch {
     return null;
   }
 }
 
-/** @param {string} sessionId */
-function saveSessionId(sessionId) {
+/**
+ * @param {string} key
+ * @param {string | null} value  null removes the key
+ */
+function store(key, value) {
   try {
-    localStorage.setItem(SESSION_STORAGE_KEY, sessionId);
+    if (value === null) {
+      localStorage.removeItem(key);
+    } else {
+      localStorage.setItem(key, value);
+    }
   } catch {
-    // Storage unavailable (private mode); the session just won't survive reloads.
+    // Storage unavailable (private mode); values just won't survive reloads.
   }
+}
+
+/**
+ * Device pairing: `https://artemis-v01/#token=XYZ` saves the token, then removes it
+ * from the address bar. The URL fragment is never sent to the server, so the token
+ * doesn't end up in proxy or server logs.
+ */
+export function consumeTokenFromUrl() {
+  const match = window.location.hash.match(/(?:^#|&)token=([^&]+)/);
+  if (!match) {
+    return;
+  }
+  store(TOKEN_STORAGE_KEY, decodeURIComponent(match[1]));
+  history.replaceState(null, "", window.location.pathname + window.location.search);
+}
+
+/** Ask for the access token, then reconnect with it. */
+function requestToken() {
+  showAuthForm((token) => {
+    store(TOKEN_STORAGE_KEY, token);
+    hideAuthForm();
+    connect();
+  });
 }
 
 /** Show "Connected" once nothing is happening locally or on the server. */
@@ -102,7 +144,8 @@ export async function handleServerMessage(message) {
   switch (message.type) {
     case "session":
       state.sessionId = message.session_id;
-      saveSessionId(message.session_id);
+      store(SESSION_STORAGE_KEY, message.session_id);
+      hideAuthForm();
       console.info(`Session ${message.session_id} (agent: ${message.agent}, protocol v${message.protocol})`);
       break;
 
@@ -191,7 +234,11 @@ export function connect() {
 
   connection.onopen = () => {
     setAiVoiceState(false);
-    sendMessage({ type: "hello", session_id: state.sessionId ?? loadSessionId() });
+    sendMessage({
+      type: "hello",
+      session_id: state.sessionId ?? loadStored(SESSION_STORAGE_KEY),
+      token: loadStored(TOKEN_STORAGE_KEY),
+    });
     updateRecordButton();
   };
 
@@ -215,7 +262,7 @@ export function connect() {
     console.error("WebSocket error:", error);
   };
 
-  connection.onclose = () => {
+  connection.onclose = (event) => {
     if (connection !== state.socket) {
       return;
     }
@@ -232,8 +279,23 @@ export function connect() {
     }
 
     setAiVoiceState(false);
-    setStatus("Disconnected. Reconnecting...", COLORS.error);
     updateRecordButton();
+
+    if (event.code === CLOSE_CODES.unauthorized) {
+      // Wrong or missing token: don't hammer the server, ask the user.
+      store(TOKEN_STORAGE_KEY, null);
+      setStatus("Access token required", COLORS.error);
+      requestToken();
+      return;
+    }
+
+    if (event.code === CLOSE_CODES.tryAgainLater) {
+      setStatus("Too many open connections. Retrying...", COLORS.error);
+      state.reconnectTimer = setTimeout(connect, BUSY_RETRY_MS);
+      return;
+    }
+
+    setStatus("Disconnected. Reconnecting...", COLORS.error);
     state.reconnectTimer = setTimeout(connect, CONNECTION_RETRY_MS);
   };
 }

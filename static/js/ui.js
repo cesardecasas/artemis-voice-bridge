@@ -208,6 +208,32 @@ export function showApproval(action, detail, onDecide) {
   container.append(document.createElement("br"), makeButton("Approve", true), makeButton("Deny", false));
 }
 
+/**
+ * Show the access-token form; `onSubmit` receives the trimmed token.
+ * @param {(token: string) => void} onSubmit
+ */
+export function showAuthForm(onSubmit) {
+  const form = /** @type {HTMLFormElement} */ (requireElement("auth-form"));
+  const input = /** @type {HTMLInputElement} */ (requireElement("auth-token"));
+  form.hidden = false;
+  input.value = "";
+  input.focus();
+  form.onsubmit = (event) => {
+    event.preventDefault();
+    const token = input.value.trim();
+    if (token) {
+      onSubmit(token);
+    }
+  };
+}
+
+export function hideAuthForm() {
+  const form = document.getElementById("auth-form");
+  if (form) {
+    form.hidden = true;
+  }
+}
+
 /** @param {(event: MouseEvent) => void} handler */
 export function bindRecordClick(handler) {
   const button = recordBtn();

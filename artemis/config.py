@@ -84,6 +84,10 @@ class AppSettings:
     max_audio_bytes: int
     stt_url: str
     tts_url: str
+    access_token: str
+    """Shared secret required in ``hello``. Empty string disables auth."""
+    max_connections: int
+    turns_per_minute: int
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,11 +177,15 @@ def get_settings() -> Settings:
     )
 
     app = AppSettings(
-        host=_str("ARTEMIS_APP_HOST", "0.0.0.0"),
+        # Localhost only: Caddy (on this machine) terminates HTTPS and proxies in.
+        host=_str("ARTEMIS_APP_HOST", "127.0.0.1"),
         port=_int("ARTEMIS_APP_PORT", 8080),
         max_audio_bytes=max_audio_bytes,
         stt_url=_str("ARTEMIS_STT_URL", f"http://{stt.host}:{stt.port}"),
         tts_url=_str("ARTEMIS_TTS_URL", f"http://{tts.host}:{tts.port}"),
+        access_token=_str("ARTEMIS_ACCESS_TOKEN", ""),
+        max_connections=_int("ARTEMIS_MAX_CONNECTIONS", 4),
+        turns_per_minute=_int("ARTEMIS_TURNS_PER_MINUTE", 30),
     )
 
     agent = AgentSettings(
