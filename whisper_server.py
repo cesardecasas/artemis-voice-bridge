@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import io
 import logging
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from typing import Any, Literal
@@ -49,25 +50,57 @@ class TranscribeResponse(BaseModel):
     text: str
 
 
+def generation_options(max_new_tokens: int = 448) -> dict[str, Any]:
+    """Whisper generation options built from settings.
+
+    ``initial_prompt`` primes the decoder with vocabulary it should expect,
+    which is how it learns to spell names like "Artemis" and "Hermes".
+    """
+    options: dict[str, Any] = {
+        "max_new_tokens": max_new_tokens,
+        "task": "transcribe",
+    }
+    if settings.language:
+        options["language"] = f"<|{settings.language}|>"
+    if settings.initial_prompt:
+        options["initial_prompt"] = settings.initial_prompt
+    return options
+
+
 @asynccontextmanager
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     global pipeline
 
     logger.info("Loading Whisper on %s", DEVICE)
 
-    pipeline = ov_genai.WhisperPipeline(
+    loaded = ov_genai.WhisperPipeline(
         str(MODEL_DIR),
         DEVICE
     )
 
-    logger.info("Whisper GPU service ready")
+    # Warm up: the first GPU inference compiles kernels and is much slower.
+    started = time.perf_counter()
+    await asyncio.to_thread(
+        loaded.generate,
+        [0.0] * SAMPLE_RATE,
+        **generation_options(max_new_tokens=8),
+    )
+    logger.info("Warm-up done in %.2fs", time.perf_counter() - started)
+
+    pipeline = loaded
+
+    logger.info(
+        "Whisper GPU service ready (language=%s, prompt=%r)",
+        settings.language or "auto",
+        settings.initial_prompt,
+    )
 
     yield
 
     pipeline = None
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(title="Artemis STT", lifespan=lifespan)
 
 
 @app.get("/health")
@@ -147,16 +180,17 @@ def transcribe_bytes(data: bytes) -> str:
         logger.info("Silence detected")
         return ""
 
-    result = pipeline.generate(
-        audio.tolist(),
-        max_new_tokens=448,
-        task="transcribe"
-    )
+    result = pipeline.generate(audio.tolist(), **generation_options())
 
-    if hasattr(result, "texts"):
-        return str(result.texts[0]).strip()
+    text = str(result.texts[0] if hasattr(result, "texts") else result).strip()
 
-    return str(result).strip()
+    # On noise Whisper emits bare punctuation such as "." or "..."; treat that
+    # as "no speech" so the client never shows an empty-looking turn.
+    if not any(char.isalnum() for char in text):
+        logger.info("No words in transcription output %r", text)
+        return ""
+
+    return text
 
 
 @app.post("/transcribe")

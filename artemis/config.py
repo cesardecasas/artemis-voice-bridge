@@ -88,6 +88,10 @@ class SttSettings:
     model_dir: Path
     device: str
     max_audio_bytes: int
+    language: str
+    """Whisper language code (``en``, ``es``...); empty string = auto-detect."""
+    initial_prompt: str
+    """Text that primes Whisper's vocabulary (names, jargon)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -127,6 +131,13 @@ def get_settings() -> Settings:
         ),
         device=_str("ARTEMIS_STT_DEVICE", "GPU.0"),
         max_audio_bytes=max_audio_bytes,
+        language=_str("ARTEMIS_STT_LANGUAGE", "en"),
+        initial_prompt=_str(
+            "ARTEMIS_STT_INITIAL_PROMPT",
+            # Keep this to a short list of names: full sentences leak into the
+            # transcript on background noise (e.g. "A conversation with Artemis.").
+            "Artemis, Hermes.",
+        ),
     )
 
     tts = TtsSettings(
