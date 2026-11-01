@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncGenerator, AsyncIterator
 
 from artemis.agent.base import AgentContext, AgentEvent, Done, Token, ToolEnd, ToolStart
 from artemis.services import ServiceStatus
@@ -36,7 +36,7 @@ class EchoAgent:
     async def health(self) -> ServiceStatus:
         return "ready"
 
-    async def stream(self, ctx: AgentContext, text: str) -> AsyncIterator[AgentEvent]:
+    async def stream(self, ctx: AgentContext, text: str) -> AsyncGenerator[AgentEvent, None]:
         reply = f"I heard you say: {text}"
         delay = self.token_delay
 

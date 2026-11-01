@@ -168,19 +168,21 @@ Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital m
 
 ## Phase 6: Hermes integration
 
-- [ ] Confirm how Hermes is exposed locally (OpenAI-compatible API, its own HTTP/WS gateway, or a Python API) and document it in `docs/hermes.md`
-- [ ] Implement `HermesAgent` in `artemis/agent/hermes.py`:
-  - [ ] Stream tokens → `agent.token`
-  - [ ] Map tool calls → `agent.tool_start` / `agent.tool_end`
-  - [ ] Map Hermes approval prompts → `agent.approval_request`, and send the user's answer back
-  - [ ] Map our `session_id` to the Hermes conversation/session id
-  - [ ] Handle cancellation on `interrupt`
-- [ ] Add a voice-oriented system prompt: short spoken answers; put code and long output in the transcript, not in speech
-- [ ] Strip markdown and code blocks from text before it goes to TTS
-- [ ] Switch with `AGENT_BACKEND=hermes`; keep `echo` for testing
-- [ ] Verify that Hermes points at a **local** LLM endpoint (self-contained rule)
+- [x] Confirm how Hermes is exposed locally (OpenAI-compatible API, its own HTTP/WS gateway, or a Python API) and document it in `docs/hermes.md`
+- [x] Implement `HermesAgent` in `artemis/agent/hermes.py`:
+  - [x] Stream tokens → `agent.token`
+  - [x] Map tool calls → `agent.tool_start` / `agent.tool_end`
+  - [x] Map Hermes approval prompts → `agent.approval_request`, and send the user's answer back
+  - [x] Map our `session_id` to the Hermes conversation/session id
+  - [x] Handle cancellation on `interrupt`
+- [x] Add a voice-oriented system prompt: short spoken answers; put code and long output in the transcript, not in speech
+- [x] Strip markdown and code blocks from text before it goes to TTS
+- [x] Switch with `AGENT_BACKEND=hermes`; keep `echo` for testing
+- [x] Verify that Hermes points at a **local** LLM endpoint (self-contained rule)
 
 **Done when:** you can ask Artemis to do a task, watch the tool cards in the HUD, approve a risky action, and hear the result.
+
+> **Status (2026-11-01):** done, verified live (chat, tool call, interrupt) through Caddy → Artemis → Hermes → local vLLM (Gemma 4). Hermes's reasoning is turned off for voice runs (first audio 1.7 s instead of 21.6 s for a story). Open point: with Hermes's `approvals.mode: smart`, low-risk commands run without asking, so an approval card has not yet appeared in a live test. See docs/hermes.md.
 
 ---
 

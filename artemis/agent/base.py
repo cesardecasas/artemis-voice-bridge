@@ -5,7 +5,7 @@ voice pipeline: ``EchoAgent`` today, ``HermesAgent`` later.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator, Awaitable, Callable
+from collections.abc import AsyncGenerator, Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol
 
@@ -56,7 +56,7 @@ class AgentContext:
 class AgentBackend(Protocol):
     name: str
 
-    def stream(self, ctx: AgentContext, text: str) -> AsyncIterator[AgentEvent]:
+    def stream(self, ctx: AgentContext, text: str) -> AsyncGenerator[AgentEvent, None]:
         """Yield events for one user turn, ending with exactly one ``Done``.
 
         The pipeline may cancel the iteration at any point (user interrupt);

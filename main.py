@@ -83,7 +83,7 @@ def create_app(
         async with httpx.AsyncClient(timeout=httpx.Timeout(60.0, connect=5.0)) as client:
             runtime.stt = SttClient(client, cfg.app.stt_url)
             runtime.tts = TtsClient(client, cfg.app.tts_url)
-            agent = create_agent(cfg.agent)
+            agent = create_agent(cfg.agent, client)
             runtime.deps = VoiceDeps(
                 stt=runtime.stt,
                 tts=runtime.tts,

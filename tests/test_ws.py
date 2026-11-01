@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import dataclasses
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncGenerator, AsyncIterator, Iterator
 from typing import Any
 
 import pytest
@@ -56,7 +56,7 @@ class SlowAgent:
     async def health(self) -> ServiceStatus:
         return "ready"
 
-    async def stream(self, ctx: AgentContext, text: str) -> AsyncIterator[AgentEvent]:
+    async def stream(self, ctx: AgentContext, text: str) -> AsyncGenerator[AgentEvent, None]:
         yield Token("thinking...")
         try:
             await asyncio.sleep(30)
@@ -410,7 +410,7 @@ class ScriptAgent:
     async def health(self) -> ServiceStatus:
         return "ready"
 
-    async def stream(self, ctx: AgentContext, text: str) -> AsyncIterator[AgentEvent]:
+    async def stream(self, ctx: AgentContext, text: str) -> AsyncGenerator[AgentEvent, None]:
         for token in self.tokens:
             yield Token(token)
             await asyncio.sleep(self.delay)

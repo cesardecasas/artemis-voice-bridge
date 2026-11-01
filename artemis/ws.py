@@ -10,6 +10,7 @@ cancelled on interrupt or barge-in.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import logging
@@ -419,24 +420,27 @@ class VoiceConnection:
             reply = ""
             streamed = False
 
-            async for event in self.deps.agent.stream(ctx, text):
-                match event:
-                    case Token(text=token):
-                        if first_token_ms is None:
-                            first_token_ms = _ms_since(started)
-                        streamed = True
-                        await self.send({"type": "agent.token", "text": token})
-                        speech.feed(token)
-                    case ToolStart(id=tool_id, name=name, summary=summary):
-                        await self.send(
-                            {"type": "agent.tool_start", "id": tool_id, "name": name, "summary": summary}
-                        )
-                    case ToolEnd(id=tool_id, ok=ok, summary=summary):
-                        await self.send(
-                            {"type": "agent.tool_end", "id": tool_id, "ok": ok, "summary": summary}
-                        )
-                    case Done(text=final):
-                        reply = final
+            # aclosing: on interrupt the agent's stream is closed right away, so a
+            # remote agent (Hermes) is told to stop immediately, not at GC time.
+            async with contextlib.aclosing(self.deps.agent.stream(ctx, text)) as events:
+                async for event in events:
+                    match event:
+                        case Token(text=token):
+                            if first_token_ms is None:
+                                first_token_ms = _ms_since(started)
+                            streamed = True
+                            await self.send({"type": "agent.token", "text": token})
+                            speech.feed(token)
+                        case ToolStart(id=tool_id, name=name, summary=summary):
+                            await self.send(
+                                {"type": "agent.tool_start", "id": tool_id, "name": name, "summary": summary}
+                            )
+                        case ToolEnd(id=tool_id, ok=ok, summary=summary):
+                            await self.send(
+                                {"type": "agent.tool_end", "id": tool_id, "ok": ok, "summary": summary}
+                            )
+                        case Done(text=final):
+                            reply = final
 
             if not streamed:
                 speech.feed(reply)  # agent that answers in one piece

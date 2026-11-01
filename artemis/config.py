@@ -126,6 +126,14 @@ class AgentSettings:
     backend: str
     echo_demo: bool
     """Echo agent emits fake tool/approval events for messages containing "demo"."""
+    hermes_url: str
+    """Hermes gateway API server, e.g. ``http://127.0.0.1:8642``."""
+    hermes_key: str
+    """``API_SERVER_KEY`` from ``~/.hermes/.env``. Never logged."""
+    hermes_instructions: str
+    """Extra system instructions for voice; empty = the built-in voice prompt."""
+    hermes_reasoning: str
+    """Reasoning for voice turns: off | low | medium | high | default (Hermes config)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -191,6 +199,10 @@ def get_settings() -> Settings:
     agent = AgentSettings(
         backend=_str("ARTEMIS_AGENT_BACKEND", "echo"),
         echo_demo=_bool("ARTEMIS_ECHO_DEMO", False),
+        hermes_url=_str("ARTEMIS_HERMES_URL", "http://127.0.0.1:8642").rstrip("/"),
+        hermes_key=_str("ARTEMIS_HERMES_KEY", ""),
+        hermes_instructions=_str("ARTEMIS_HERMES_INSTRUCTIONS", ""),
+        hermes_reasoning=_str("ARTEMIS_HERMES_REASONING", "off").lower(),
     )
 
     return Settings(app=app, stt=stt, tts=tts, agent=agent)

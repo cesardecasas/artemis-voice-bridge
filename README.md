@@ -20,7 +20,8 @@ Artemis Voice Bridge is the voice interface for **Artemis**, a local AI assistan
    │  turn task (cancellable):                                         │
    │    1. SttClient ──────────► whisper_server.py  :8083              │
    │                              Whisper Large-v3-Turbo, OpenVINO B50 │
-   │    2. AgentBackend.stream   EchoAgent now → HermesAgent (Phase 6) │
+   │    2. AgentBackend.stream ─► Hermes gateway  :8642 (Runs API, SSE)│
+   │                              → Gemma 4 on local vLLM  :8003       │
    │       tokens / tool events / approval requests → browser          │
    │    3. TtsClient ──────────► tts_server.py      :8084              │
    │                              Kokoro-82M, ONNX Runtime (CPU)       │
@@ -43,6 +44,8 @@ Each service runs in its own virtualenv, so their dependency stacks never confli
 | Whisper warm-up at startup | 0.5 s (so the first real request isn't slow) |
 | Kokoro TTS (CPU) | ~0.2× real time: 8 s of speech in 1.6 s; model loads in under 1 s |
 | Full turn (end of speech → reply audio received) | ~0.9 s for a short sentence (STT 130 ms, TTS ~750 ms) |
+| Hermes + Gemma 4, short question (reasoning off) | First audio ~0.9 s |
+| Hermes + Gemma 4, five-sentence story (reasoning off) | First audio 1.7 s (21.6 s with Hermes's default reasoning) |
 | Long replies (sentence streaming) | First sentence audible at ~0.74 s while the agent was still writing (full reply done at 3.8 s) |
 
 ---
@@ -114,8 +117,12 @@ All settings live in `.env` and are read by [`artemis/config.py`](artemis/config
 | `ARTEMIS_TTS_VOICE` | `af_heart` | Artemis's voice (list: `GET :8084/voices`) |
 | `ARTEMIS_TTS_SPEED` | `1.0` | Speaking rate (0.5–2.0) |
 | `ARTEMIS_MAX_AUDIO_BYTES` | `20971520` | Max size of one recording |
-| `ARTEMIS_AGENT_BACKEND` | `echo` | `echo` (placeholder) or `hermes` (Phase 6) |
+| `ARTEMIS_AGENT_BACKEND` | `echo` | `echo` (placeholder) or `hermes` (see [`docs/hermes.md`](docs/hermes.md)) |
 | `ARTEMIS_ECHO_DEMO` | `false` | Echo agent emits a fake tool call + approval for messages containing "demo" |
+| `ARTEMIS_HERMES_URL` | `http://127.0.0.1:8642` | Hermes gateway API server |
+| `ARTEMIS_HERMES_KEY` | *(empty)* | Same value as `API_SERVER_KEY` in `~/.hermes/.env` |
+| `ARTEMIS_HERMES_REASONING` | `off` | Hidden reasoning for voice turns: `off`, `low`, `medium`, `high`, `default` (= Hermes config). `off` answers about 8× sooner with Gemma 4 |
+| `ARTEMIS_HERMES_INSTRUCTIONS` | *(built-in)* | Replaces the voice instructions sent with every Hermes run |
 
 See [`.env.example`](.env.example) for the full list.
 
@@ -221,6 +228,7 @@ artemis/
   agent/
     base.py             AgentBackend protocol + events (Token, ToolStart, ToolEnd, Done)
     echo.py             EchoAgent placeholder (with optional demo tool/approval events)
+    hermes.py           HermesAgent: Hermes Runs API (SSE events, approvals, stop)
     __init__.py         create_agent() picks the backend from ARTEMIS_AGENT_BACKEND
 static/
   index.html            HUD markup: status strip, conversation, core orb, activity, composer
@@ -243,10 +251,12 @@ static/
     audio.js            Gapless Web Audio reply queue, level meter, chimes
     main.js             Tap/Space/Esc controls, composer, mute, boot
 docs/protocol.md        WebSocket protocol spec
+docs/hermes.md          Hermes setup, event mapping, reasoning/latency, approvals
 scripts/make_icons.py   Regenerates all icons (Pillow, run with venv-openvino)
 tests/
   test_ws.py            Backend protocol tests (pytest, fake STT/TTS/agent)
   test_speech.py        Sentence splitter tests
+  test_hermes.py        HermesAgent against a fake Hermes Runs API
   frontend.test.js      Frontend tests (node --test, lightweight DOM mock)
 test_whisper_gpu.py     Whisper GPU benchmark
 test_tts.py             Kokoro TTS benchmark and voice audition
@@ -277,6 +287,17 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.7.0: Hermes integration (Phase 6 of `PLAN.md`)
+
+- **`HermesAgent`** (`artemis/agent/hermes.py`) connects Artemis to Hermes Agent through the gateway's Runs API: streamed tokens, tool cards, approval requests answered from the HUD, and interrupt/barge-in that stops the Hermes run. Select it with `ARTEMIS_AGENT_BACKEND=hermes`. Setup and details: [`docs/hermes.md`](docs/hermes.md).
+- Each Artemis session maps to the Hermes session `artemis-<id>` (conversation kept server-side), with a stable `X-Hermes-Session-Key` for long-term memory and an `Idempotency-Key` per run.
+- **Voice instructions** sent with every run: short spoken sentences, code and long output in fenced blocks (shown, never spoken).
+- **Reasoning off for voice** (`ARTEMIS_HERMES_REASONING`, default `off`): Hermes is configured for `high` reasoning, which made Gemma 4 think silently for 20–35 s. A per-request override cut a story's first audio from 21.6 s to 1.7 s. Only Artemis's runs are affected.
+- Finished tool cards keep the command (`✓ df -h /`); Hermes clarification prompts are answered automatically with "make a reasonable assumption".
+- Agent streams are now closed promptly on interrupt (`contextlib.aclosing`), so Hermes is told to stop immediately. `AgentBackend.stream` is typed as an `AsyncGenerator`.
+- Verified live through Caddy → Artemis → Hermes → local vLLM: chat, a `df -h /` tool call, and an interrupt (Hermes logged the stop).
+- Tests: 17 Hermes tests against a fake Runs API (streaming, tools, approvals in both formats, clarify, stop on cancel, failures, SSE parsing). 55 backend + 21 frontend.
 
 ### 1.6.0: Sentence-streamed speech (Phase 5 of `PLAN.md`)
 

@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import httpx
+
 from artemis.agent.base import (
     AgentBackend,
     AgentContext,
@@ -12,6 +14,7 @@ from artemis.agent.base import (
     ToolStart,
 )
 from artemis.agent.echo import EchoAgent
+from artemis.agent.hermes import HermesAgent, HermesError
 from artemis.config import AgentSettings
 
 __all__ = [
@@ -20,6 +23,8 @@ __all__ = [
     "AgentEvent",
     "Done",
     "EchoAgent",
+    "HermesAgent",
+    "HermesError",
     "Token",
     "ToolEnd",
     "ToolStart",
@@ -27,13 +32,18 @@ __all__ = [
 ]
 
 
-def create_agent(settings: AgentSettings) -> AgentBackend:
+def create_agent(settings: AgentSettings, client: httpx.AsyncClient) -> AgentBackend:
+    """Build the configured backend. ``client`` is the app's shared HTTP client."""
     match settings.backend:
         case "echo":
             return EchoAgent(demo=settings.echo_demo)
         case "hermes":
-            raise NotImplementedError(
-                "Hermes backend arrives in Phase 6; use ARTEMIS_AGENT_BACKEND=echo"
+            return HermesAgent(
+                client,
+                base_url=settings.hermes_url,
+                api_key=settings.hermes_key,
+                instructions=settings.hermes_instructions,
+                reasoning=settings.hermes_reasoning,
             )
         case other:
             raise ValueError(f"Unknown ARTEMIS_AGENT_BACKEND {other!r}")
