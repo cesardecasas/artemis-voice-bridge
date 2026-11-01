@@ -40,6 +40,7 @@ from artemis.handsfree import HandsFree, HandsFreeConfig
 from artemis.services import ServiceError
 from artemis.speech import SentenceSplitter
 from artemis.vad import VadModel
+from artemis.logs import log_context
 from artemis.session import Session, SessionStore
 
 logger = logging.getLogger("artemis-voice")
@@ -192,7 +193,12 @@ class VoiceConnection:
         self._closed = True
         await self.ws.close(code=code, reason=reason)
 
+    def _log_fields(self) -> dict[str, str]:
+        return {"session_id": self.session.id} if self.session is not None else {}
+
     async def run(self) -> None:
+        # Every log line from this connection (and tasks it starts) carries the session id.
+        log_context.set(self._log_fields)
         try:
             while not self._closed:
                 if self.authenticated:

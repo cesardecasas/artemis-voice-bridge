@@ -25,8 +25,9 @@ from numpy.typing import NDArray
 from pydantic import BaseModel
 
 from artemis.config import get_settings
+from artemis.logs import configure_logging
 
-logging.basicConfig(level=logging.INFO)
+configure_logging("stt")
 logger = logging.getLogger("artemis-whisper")
 
 settings = get_settings().stt

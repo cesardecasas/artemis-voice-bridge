@@ -23,6 +23,7 @@ from fastapi.staticfiles import StaticFiles
 
 from artemis.agent import create_agent
 from artemis.config import BASE_DIR, HandsFreeSettings, Settings, get_settings
+from artemis.logs import configure_logging
 from artemis.handsfree import HandsFreeConfig
 from artemis.protocol import CLOSE_TRY_AGAIN_LATER
 from artemis.services import ServiceHealth, ServiceStatus, SttClient, TtsClient
@@ -30,7 +31,7 @@ from artemis.session import SessionStore
 from artemis.vad import SileroVad, VadConfig, VadModel
 from artemis.ws import VoiceConnection, VoiceDeps
 
-logging.basicConfig(level=logging.INFO)
+configure_logging("app")
 logger = logging.getLogger("artemis-voice")
 
 STATIC_DIR = BASE_DIR / "static"

@@ -201,10 +201,11 @@ Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital m
 
 ## Phase 8: Operations
 
-- [ ] Run each service (STT, TTS, app) as a `systemd --user` unit with restart-on-failure, replacing the background jobs started by `start-artemis-voice.sh`
-- [ ] Rotate logs; use structured (JSON) logs that include the session id
-- [ ] Optional: keep transcript history in local SQLite, and add a "history" view in the HUD
-- [ ] Update the README to match the new architecture
+- [x] Run each service (STT, TTS, app) as a `systemd --user` unit with restart-on-failure, replacing the background jobs started by `start-artemis-voice.sh` (`deploy/systemd/`, `scripts/artemis-services.sh`)
+- [x] Rotate logs; use structured (JSON) logs that include the session id (journald rotates; `artemis/logs.py`)
+- [ ] Optional: keep transcript history in local SQLite, and add a "history" view in the HUD. *Not done: Hermes already stores every conversation (sessions `artemis-<id>`), so a history view could read from Hermes instead of keeping a second copy.*
+- [x] Update the README to match the new architecture, plus [`docs/operations.md`](docs/operations.md)
+- [x] A `README.md` in each important folder, describing what it contains and anything relevant to working on it
 
 ---
 

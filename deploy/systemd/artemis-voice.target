@@ -1,0 +1,9 @@
+# Artemis voice stack: start/stop all three services together.
+#   systemctl --user start artemis-voice.target
+# Installed by scripts/artemis-services.sh (do not edit the installed copy).
+[Unit]
+Description=Artemis voice stack (Whisper STT, Kokoro TTS, voice app)
+Wants=artemis-voice-stt.service artemis-voice-tts.service artemis-voice-app.service
+
+[Install]
+WantedBy=default.target

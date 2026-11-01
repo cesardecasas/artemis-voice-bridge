@@ -1,0 +1,28 @@
+# Artemis Kokoro TTS (CPU)
+# Template: scripts/artemis-services.sh fills in @BASE_DIR@ / @PORT@ and installs it.
+[Unit]
+Description=Artemis Kokoro TTS (CPU)
+PartOf=artemis-voice.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+
+[Service]
+Type=exec
+WorkingDirectory=@BASE_DIR@
+ExecStart=@BASE_DIR@/venv-tts/bin/python -m artemis.serve tts
+# "started" means /health answers, so dependents and `start` wait for it.
+ExecStartPost=@BASE_DIR@/scripts/wait-healthy.sh @PORT@ 90
+TimeoutStartSec=105
+Restart=on-failure
+RestartSec=3
+# Self-contained: never reach out to model hubs.
+Environment=PYTHONUNBUFFERED=1 HF_HUB_OFFLINE=1 TRANSFORMERS_OFFLINE=1 HF_HUB_DISABLE_TELEMETRY=1
+# One JSON object per line; journald stores and rotates them.
+Environment=ARTEMIS_LOG_FORMAT=json
+SyslogIdentifier=%N
+NoNewPrivileges=true
+ProtectSystem=full
+
+[Install]
+WantedBy=artemis-voice.target

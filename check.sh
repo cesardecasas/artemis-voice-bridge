@@ -11,10 +11,13 @@ echo "== mypy: app"
 "$MYPY" main.py artemis/ tests/
 
 echo "== mypy: STT service"
-"$MYPY" --python-executable venv-openvino/bin/python whisper_server.py
+"$MYPY" --python-executable venv-openvino/bin/python whisper_server.py artemis/logs.py artemis/serve.py
 
 echo "== mypy: TTS service"
-"$MYPY" --python-executable venv-tts/bin/python tts_server.py test_tts.py
+"$MYPY" --python-executable venv-tts/bin/python tts_server.py test_tts.py artemis/logs.py artemis/serve.py
+
+echo "== shell scripts"
+for script in *.sh scripts/*.sh; do bash -n "$script"; done
 
 echo "== tsc: frontend"
 npx --no-install tsc -p jsconfig.json

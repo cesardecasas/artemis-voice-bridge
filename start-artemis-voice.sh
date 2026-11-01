@@ -1,10 +1,17 @@
 #!/usr/bin/env bash
 # Start all Artemis services: Whisper STT, Kokoro TTS, and the voice web app.
-# Each service is skipped if it is already healthy.
+#
+# If the systemd units are installed (scripts/artemis-services.sh install), this
+# just starts them. Otherwise it falls back to background processes with pid
+# files and logs in logs/ (handy for development). Healthy services are skipped.
 set -Eeuo pipefail
 
 BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 cd "$BASE_DIR"
+
+if [[ -f "${XDG_CONFIG_HOME:-$HOME/.config}/systemd/user/artemis-voice.target" ]]; then
+    exec "$BASE_DIR/scripts/artemis-services.sh" start
+fi
 
 # Load configuration (.env is optional; real env vars take precedence).
 if [[ -f "$BASE_DIR/.env" ]]; then

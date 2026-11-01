@@ -149,15 +149,22 @@ If Whisper returns only punctuation (e.g. `...` on noise), the STT service treat
 
 ## Running
 
+Artemis runs as three **systemd user services** that start at boot and restart if they crash:
+
 ```bash
-./start-artemis-voice.sh   # starts STT → TTS → app, waiting for each /health
-./stop-artemis-voice.sh    # stops all three
+scripts/artemis-services.sh install    # once: install, enable at boot, start
+scripts/artemis-services.sh status     # state and /health of each service
+scripts/artemis-services.sh restart app
+scripts/artemis-services.sh logs app -f
 ```
 
-- Services that are already healthy are skipped.
-- The start script forces `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`, so nothing tries to reach a model hub.
-- Logs: `logs/voice.log`, `logs/whisper.log`, `logs/tts.log`. PIDs: `logs/*.pid`.
+`./start-artemis-voice.sh` and `./stop-artemis-voice.sh` still work: they control the services when they're installed, and otherwise fall back to background processes (logs in `logs/`), which is handy for development.
+
+- The units force `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1`, so nothing tries to reach a model hub.
+- Logs are JSON lines in the systemd journal, rotated by journald, and carry the session id. Transcripts and secrets are never logged.
 - Microphone access needs HTTPS or `localhost`. Use `https://artemis-v01` (Caddy) from other devices.
+
+**Day-to-day operations** (what to restart when, log queries, upgrades, backups, troubleshooting): [`docs/operations.md`](docs/operations.md). Unit details: [`deploy/README.md`](deploy/README.md).
 
 ### Using the HUD
 
@@ -244,7 +251,10 @@ main.py                 App factory (create_app): /health, /ws, static hosting
 whisper_server.py       STT service (OpenVINO Whisper on the B50)
 tts_server.py           TTS service (Kokoro-82M on CPU)
 artemis/
+  README.md             What each module does, and the package's conventions
   config.py             Typed settings shared by all three services (stdlib only)
+  logs.py               Text/JSON logging with the session id (stdlib only)
+  serve.py              python -m artemis.serve app|stt|tts (used by the units)
   protocol.py           WebSocket message types + client-message validation
   ws.py                 VoiceConnection: receive loop, cancellable turns, approvals
   services.py           SttClient / TtsClient for the local services
@@ -282,18 +292,27 @@ static/
     main.js             Tap/Space/Esc controls, composer, mute, boot
 docs/protocol.md        WebSocket protocol spec
 docs/hermes.md          Hermes setup, event mapping, reasoning/latency, approvals
-scripts/make_icons.py   Regenerates all icons (Pillow, run with venv-openvino)
+docs/operations.md      Services, logs, upgrades, backups, troubleshooting
+deploy/systemd/         systemd --user unit templates (artemis-voice.target + 3 services)
+scripts/
+  artemis-services.sh   install | uninstall | start | stop | restart | status | logs
+  wait-healthy.sh       Waits for /health (units' ExecStartPost)
+  make_icons.py         Regenerates all icons (Pillow, run with venv-openvino)
+models/                 Local models (git-ignored except its README)
 tests/
   test_ws.py            Backend protocol tests (pytest, fake STT/TTS/agent)
   test_speech.py        Sentence splitter tests
   test_hermes.py        HermesAgent against a fake Hermes Runs API
   test_handsfree.py     VAD segmenter, wake word, hands-free controller
+  test_logs.py          JSON logging and session context
   frontend.test.js      Frontend tests (node --test, lightweight DOM mock)
 test_whisper_gpu.py     Whisper GPU benchmark
 test_tts.py             Kokoro TTS benchmark and voice audition
 start-/stop-artemis-voice.sh, check.sh
 PLAN.md                 Roadmap with action items
 ```
+
+Each important folder has its own `README.md` with the details: [`artemis/`](artemis/README.md), [`artemis/agent/`](artemis/agent/README.md), [`static/`](static/README.md), [`static/js/`](static/js/README.md), [`tests/`](tests/README.md), [`docs/`](docs/README.md), [`deploy/`](deploy/README.md), [`scripts/`](scripts/README.md), [`models/`](models/README.md).
 
 ---
 
@@ -318,6 +337,18 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.10.0: Operations (Phase 8 of `PLAN.md`)
+
+- **systemd user services:** `artemis-voice-stt`, `-tts` and `-app`, grouped by `artemis-voice.target` and enabled at boot (lingering is on, so no login is needed). They restart on failure (3 s delay, at most 5 times in 5 min). `start` waits for `/health`, so it returns only once the models are loaded. Hardened with `NoNewPrivileges` and `ProtectSystem=full`.
+- **`scripts/artemis-services.sh`:** `install`, `uninstall`, `start`/`stop`/`restart [stt|tts|app]`, `status` (state plus `/health`), `logs`. The unit templates live in `deploy/systemd/`; the installer fills in the paths and the ports from `.env`.
+- **Structured logs:** JSON lines in the journal (`ARTEMIS_LOG_FORMAT=json`) with `ts`, `level`, `service`, `logger`, `msg`, plus the **`session_id`** on everything a connection does, including after a "new conversation". uvicorn's access and error logs use the same format. Journald does the rotation. Text format with a short session tag is still the default in a terminal.
+- **`python -m artemis.serve app|stt|tts`** starts a service on its configured host and port.
+- `start-/stop-artemis-voice.sh` control the units when installed, and fall back to background processes otherwise.
+- **Docs:** [`docs/operations.md`](docs/operations.md) (services, logs and `jq` queries, upgrades, backups, troubleshooting), plus a `README.md` in every important folder. `models/README.md` notes that `models/whisper-large-v3-turbo/` is an unused 1.6 GB duplicate.
+- `check.sh` now also type-checks `logs.py`/`serve.py` in the STT and TTS venvs and syntax-checks the shell scripts.
+- Verified live: all three units are healthy 8 s after install. A `kill -9` of TTS was restarted automatically. A turn through Caddy and Hermes logged with its session id. Whisper loaded on `GPU.0`. Neither the token nor the Hermes key appears in the journal.
+- Tests: 120 backend (5 new logging tests), 30 frontend.
 
 ### 1.9.0: New conversation
 

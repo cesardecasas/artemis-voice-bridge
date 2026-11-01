@@ -28,8 +28,9 @@ from numpy.typing import NDArray
 from pydantic import BaseModel, Field
 
 from artemis.config import get_settings
+from artemis.logs import configure_logging
 
-logging.basicConfig(level=logging.INFO)
+configure_logging("tts")
 logger = logging.getLogger("artemis-tts")
 
 settings = get_settings().tts
