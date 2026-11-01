@@ -1,0 +1,15 @@
+[project]
+name = "artemis-voice-bridge"
+version = "1.1.0"
+description = "Local, self-contained voice interface for the Artemis assistant"
+requires-python = ">=3.12"
+
+[tool.mypy]
+strict = true
+warn_unreachable = true
+pretty = true
+
+# Third-party packages that ship without type information.
+[[tool.mypy.overrides]]
+module = ["av.*", "openvino_genai.*", "kokoro_onnx.*", "soundfile.*", "edge_tts.*"]
+ignore_missing_imports = true

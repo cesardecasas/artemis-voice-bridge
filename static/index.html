@@ -1,0 +1,338 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Artemis Voice Bridge</title>
+    <link rel="manifest" href="manifest.json">
+    <meta name="theme-color" content="#121212">
+    <style>
+        :root {
+            --bg: #04070d;
+            --bg-2: #0a1019;
+            --panel: rgba(20, 27, 35, 0.8);
+            --panel-strong: rgba(12, 16, 22, 0.95);
+            --border: rgba(164, 216, 255, 0.18);
+            --text: #e7f2ff;
+            --muted: #93a9bb;
+            --primary: #7bd0ff;
+            --primary-strong: #57d9ff;
+            --danger: #ff5c7a;
+            --success: #6ef2c4;
+            --shadow: rgba(0, 0, 0, 0.55);
+        }
+
+        * { box-sizing: border-box; }
+
+        html, body {
+            margin: 0;
+            height: 100%;
+            background:
+                radial-gradient(circle at 50% 26%, rgba(91, 162, 255, 0.12), transparent 20%),
+                linear-gradient(180deg, var(--bg) 0%, var(--bg-2) 100%);
+            color: var(--text);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+        }
+
+        body {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: flex-start;
+            min-height: 100vh;
+            overflow: hidden;
+            position: relative;
+        }
+
+        body::before {
+            content: "";
+            position: absolute;
+            inset: 0;
+            background: radial-gradient(circle at center, rgba(123, 208, 255, 0.08), transparent 38%);
+            pointer-events: none;
+        }
+
+        .chrome-bar {
+            width: 100%;
+            height: 42px;
+            background: rgba(7, 11, 18, 0.9);
+            border-bottom: 1px solid rgba(255,255,255,0.08);
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 14px;
+            position: relative;
+            z-index: 1;
+            box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+        }
+
+        .brand {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+            font-size: 0.8rem;
+            color: var(--muted);
+            letter-spacing: 0.08em;
+            text-transform: lowercase;
+        }
+
+        .brand-mark {
+            width: 10px;
+            height: 10px;
+            border-radius: 50%;
+            background: linear-gradient(135deg, #ff8b78, #ff5d73);
+            box-shadow: 0 0 12px rgba(255, 120, 128, 0.7);
+            border: 1px solid rgba(255,255,255,0.4);
+        }
+
+        .status-pill {
+            display: inline-flex;
+            align-items: center;
+            gap: 8px;
+            padding: 5px 10px 5px 8px;
+            border-radius: 999px;
+            background: rgba(30, 39, 46, 0.9);
+            border: 1px solid rgba(255,255,255,0.08);
+            font-size: 0.76rem;
+            color: var(--muted);
+            font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+        }
+
+        .status-dot {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            background: var(--success);
+            box-shadow: 0 0 10px rgba(110, 242, 196, 0.9);
+            animation: pulse 1.6s ease-in-out infinite;
+        }
+
+        .voice-panel {
+            position: relative;
+            z-index: 1;
+            width: min(92vw, 760px);
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            margin-top: 34px;
+            gap: 24px;
+        }
+
+        .display-panel {
+            width: min(100%, 620px);
+            min-height: 280px;
+            max-height: 42vh;
+            background: rgba(14, 18, 24, 0.82);
+            border: 1px solid var(--border);
+            border-radius: 16px;
+            box-shadow: 0 14px 44px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.05);
+            padding: 18px 18px 12px;
+            overflow: hidden;
+        }
+
+        #display {
+            width: 100%;
+            height: 100%;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            scrollbar-width: thin;
+            scrollbar-color: rgba(255,255,255,0.25) transparent;
+        }
+
+        .message {
+            margin: 0;
+            font-size: 1.06rem;
+            line-height: 1.5;
+            letter-spacing: 0.02em;
+            word-break: break-word;
+            opacity: 0.92;
+        }
+
+        .user { color: var(--primary); }
+        .artemis { color: #dfeaff; }
+
+        .controls {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 12px;
+            justify-content: center;
+        }
+
+        .orb-shell {
+            position: relative;
+            width: 140px;
+            height: 140px;
+            display: grid;
+            place-items: center;
+        }
+
+        .orb-ring,
+        .orb-ring-2,
+        .orb-ring-3 {
+            position: absolute;
+            inset: 0;
+            border-radius: 50%;
+            border: 1px solid rgba(123, 208, 255, 0.3);
+            opacity: 0;
+            transform: scale(0.8);
+        }
+
+        .orb-ring {
+            animation: ringPulse 2.2s ease-out infinite;
+        }
+
+        .orb-ring-2 {
+            animation: ringPulse 2.2s ease-out 0.7s infinite;
+        }
+
+        .orb-ring-3 {
+            animation: ringPulse 2.2s ease-out 1.4s infinite;
+        }
+
+        #record-btn {
+            width: 102px;
+            height: 102px;
+            border-radius: 50%;
+            border: none;
+            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.32), rgba(184, 201, 214, 0.15) 25%, rgba(53,65,75,0.9) 70%);
+            color: #edf6ff;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            box-shadow:
+                0 0 0 8px rgba(255,255,255,0.02),
+                0 18px 28px rgba(0,0,0,0.42),
+                inset 0 0 20px rgba(255,255,255,0.12);
+            transition: transform 0.22s ease, box-shadow 0.22s ease, filter 0.22s ease;
+            position: relative;
+            z-index: 1;
+            -webkit-tap-highlight-color: transparent;
+        }
+
+.a-mark {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 2.4rem;
+            line-height: 1;
+            font-weight: 700;
+            letter-spacing: -0.08em;
+            transform: translateY(-2px);
+            text-shadow: 0 0 18px rgba(255,255,255,0.4);
+        }
+
+        #record-btn.recording {
+            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.2), rgba(255, 92, 122, 0.25) 25%, rgba(63, 18, 18, 0.9) 70%);
+            box-shadow:
+                0 0 0 10px rgba(255, 92, 122, 0.12),
+                0 0 28px rgba(255, 92, 122, 0.46),
+                0 18px 30px rgba(0,0,0,0.55),
+                inset 0 0 18px rgba(255,255,255,0.12);
+            transform: scale(1.04);
+        }
+
+        #record-btn.recording .mic-icon {
+            filter: drop-shadow(0 0 12px rgba(255, 92, 122, 0.8));
+        }
+
+        body.ai-speaking .orb-ring,
+        body.ai-speaking .orb-ring-2,
+        body.ai-speaking .orb-ring-3 {
+            opacity: 1;
+            border-color: rgba(87, 217, 255, 0.55);
+        }
+
+        body.ai-speaking #record-btn {
+            background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.22), rgba(87, 217, 255, 0.28) 25%, rgba(12, 44, 63, 0.95) 70%);
+            box-shadow:
+                0 0 0 10px rgba(87, 217, 255, 0.12),
+                0 0 26px rgba(87, 217, 255, 0.46),
+                0 18px 30px rgba(0,0,0,0.55),
+                inset 0 0 18px rgba(255,255,255,0.12);
+        }
+
+        #record-btn:active {
+            transform: scale(0.96);
+        }
+
+        .visualizer {
+            width: 160px;
+            height: 46px;
+            display: flex;
+            align-items: end;
+            justify-content: center;
+            gap: 4px;
+            transform: translateY(4px);
+        }
+
+        .bar {
+            width: 5px;
+            min-height: 6px;
+            border-radius: 999px;
+            background: linear-gradient(180deg, rgba(123,208,255,1), rgba(87,217,255,0.5));
+            box-shadow: 0 0 10px rgba(87, 217, 255, 0.35);
+            height: 5px;
+        }
+
+        @keyframes pulse {
+            0%, 100% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.35); opacity: 0.7; }
+        }
+
+        @keyframes ringPulse {
+            0% {
+                opacity: 0;
+                transform: scale(0.72);
+            }
+            20% {
+                opacity: 1;
+            }
+            100% {
+                opacity: 0;
+                transform: scale(1.18);
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="chrome-bar">
+        <div class="status-pill">
+            <span class="status-dot"></span>
+            <span id="status">Disconnected</span>
+        </div>
+        <div class="brand">
+            <span class="brand-mark"></span>
+            <span>Artemis</span>
+        </div>
+    </div>
+
+    <main class="voice-panel">
+        <div class="display-panel">
+            <div id="display">
+                <div class="message artemis">Artemis: Standing by.</div>
+            </div>
+        </div>
+
+        <div class="controls">
+            <div class="orb-shell" aria-hidden="true">
+                <div class="orb-ring"></div>
+                <div class="orb-ring-2"></div>
+                <div class="orb-ring-3"></div>
+                <button id="record-btn" type="button" aria-label="Start recording" aria-pressed="false">
+                    <span class="a-mark" aria-hidden="true">A</span>
+                </button>
+            </div>
+
+            <div class="visualizer" id="visualizer" aria-hidden="true"></div>
+        </div>
+    </main>
+
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

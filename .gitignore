@@ -1,0 +1,22 @@
+# Virtual environments
+venv/
+venv-*/
+
+# Local models (large binaries, fetched once — see README "Models")
+models/
+
+# Runtime output
+media/
+logs/
+*.log
+
+# Python
+__pycache__/
+*.pyc
+.mypy_cache/
+
+# Node
+node_modules/
+
+# Local configuration (copy from .env.example)
+.env

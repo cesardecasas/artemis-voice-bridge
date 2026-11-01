@@ -1,0 +1,207 @@
+# Artemis Voice Bridge: Roadmap
+
+Goal: a fully **self-contained**, local-first voice interface for Artemis (Jarvis-style HUD) that will become the front end for the **Hermes agent**.
+
+**Guiding rule:** nothing leaves the machine at runtime. That means no cloud TTS, no CDN assets, no external icons or fonts and no model downloads at startup. Every model, font and asset lives in this repo or on local disk.
+
+Work through the phases in order. Each one leaves the app in a working state.
+
+---
+
+## Phase 0: Foundation (do first)
+
+- [x] `git init`, add `.gitignore` (`venv*/`, `models/`, `media/`, `logs/`, `__pycache__/`, `*.log`), first commit
+- [ ] Remove the duplicate model dir `models/whisper-large-v3-turbo/` (keep `-ready`, which is the one in use; saves 1.6 GB). **On hold:** the two dirs are *different* exports (different weights and config), not copies. Decide manually whether the non-`-ready` one is still needed
+- [x] Add `requirements.txt` for `venv` (app) and `requirements-stt.txt` for `venv-openvino` (pin versions)
+- [x] Create `.env.example` and move hardcoded values out of the code: ports, Whisper URL, device (`GPU.0`), TTS voice, max recording size
+- [x] Set `HF_HUB_OFFLINE=1` / `TRANSFORMERS_OFFLINE=1` in the startup script so nothing tries to reach Hugging Face
+
+**Done when:** the repo is versioned, config comes from `.env`, and the app runs the same as today.
+
+> **Status (2026-11-01):** done, except the model-dir cleanup (on hold, see above). Also added: strict typing (mypy + `tsc` on JSDoc) and `check.sh`.
+
+---
+
+## Phase 1: Local TTS (high priority)
+
+Replace `edge_tts`, which sends every reply to Microsoft's servers, with a local engine.
+
+**Recommendation:** **Kokoro-82M** via `kokoro-onnx`. It sounds much better than other small models and runs faster than real time on CPU. **Piper** is the fallback: very fast and lightweight, with lower quality. Both run fully offline.
+
+- [x] Create `tts_server.py` as a separate local service (like `whisper_server.py`) on port `8084`
+  - [x] Load the model once at startup from `models/kokoro/` (`.onnx` + `voices.bin` stored locally)
+  - [x] `POST /synthesize` `{text, voice, speed}`: return WAV/PCM bytes
+  - [x] `GET /health`: return `ready` / `loading`, the model and the voice
+  - [x] Warm up at startup (synthesize one short phrase) so the first reply isn't slow
+- [ ] Pick the Artemis voice (default is `af_heart` for now): audition the Kokoro voices (e.g. `af_heart`, `af_bella`, `bf_emma`) and set the chosen one in `.env`
+- [ ] Optional: try running Kokoro on the B50 through OpenVINO. Only do this if CPU latency is too high, since STT already uses the GPU
+- [x] Update `main.py` to call the local TTS service instead of `edge_tts`; remove `edge_tts` from the requirements
+- [x] Stop writing mp3s to `media/`: send audio as binary WebSocket frames (or delete each file right after it plays)
+- [x] Add a TTS step to `start-artemis-voice.sh` (start, then wait for `/health`)
+- [x] Add a `test_tts.py` benchmark (latency, real-time factor), matching `test_whisper_gpu.py`
+
+**Done when:** you can unplug the network cable and the whole speak → transcribe → reply → speak loop still works.
+
+> **Status (2026-11-01):** done, except choosing a voice and the optional OpenVINO TTS item. Kokoro runs at RTF ~0.2 on CPU; a full turn takes ~1.3 s. Uninstalling `edge-tts` from `venv/` is left for you to do (it's no longer in `requirements.txt`).
+
+---
+
+## Phase 2: Quick fixes and self-containment cleanup
+
+- [ ] **Whisper name recognition:** pass `initial_prompt="Artemis, Hermes."` (and/or `hotwords`) plus `language="<|en|>"` in `whisper_server.py`. This fixes "Earthmas"
+- [ ] Warm up Whisper at startup with one second of silence so the first request isn't slow
+- [ ] **Local app icon:** replace the flaticon URL in `manifest.json` with `static/icons/artemis-192.png` and `-512.png`; add a `favicon.ico` (the logs show a 404)
+- [ ] Fix `theme_color` / `background_color` in the manifest to match the UI palette
+- [ ] Service worker: either remove `sw.js`, or register it with **network-first** caching and a versioned cache name. It must never serve stale JS forever
+- [x] Use one shared `httpx.AsyncClient` (created in lifespan) instead of a new one per request
+- [x] ~~Don't create the temporary `.webm` file until the first audio chunk arrives~~ Recordings are now buffered in memory; no temporary files at all
+- [ ] Audit: `grep -r "http" static/` should show no external URLs
+
+**Done when:** no external requests appear in the browser's network tab, and "Artemis" transcribes correctly.
+
+---
+
+## Phase 3: Protocol and backend restructure (Hermes-ready)
+
+### 3a. WebSocket event protocol
+Replace the 4-byte `END_MARKER` with typed JSON events in text frames. Binary frames carry audio only.
+
+```
+client → server
+  {type:"hello", session_id?}              # resume a session after reconnect
+  {type:"audio.start", format:"webm/opus"}
+  <binary audio frames>
+  {type:"audio.end"}
+  {type:"text.input", text}
+  {type:"interrupt"}                       # barge-in / stop speaking
+  {type:"approval.response", id, approved}
+
+server → client
+  {type:"session", session_id}
+  {type:"state", value:"idle|listening|transcribing|thinking|speaking"}
+  {type:"transcript.final", text}
+  {type:"agent.token", text}
+  {type:"agent.tool_start", id, name, summary}
+  {type:"agent.tool_end", id, ok, summary}
+  {type:"agent.approval_request", id, action, detail}
+  {type:"agent.done", text}
+  {type:"tts.chunk", seq, final}  + <binary audio frame>
+  {type:"metrics", stt_ms, first_token_ms, first_audio_ms}
+  {type:"error", code, message}
+```
+
+- [ ] Write the spec as `docs/protocol.md`
+- [ ] Implement it on the server and the client; the UI is driven by `state` events (no more string matching like `"No speech detected"`)
+
+### 3b. Backend package layout
+```
+artemis/
+  config.py        # pydantic-settings, reads .env
+  protocol.py      # event models
+  stt.py           # client for whisper_server
+  tts.py           # client for tts_server
+  agent/
+    base.py        # AgentBackend interface
+    echo.py        # EchoAgent (today's behavior)
+    hermes.py      # HermesAgent (Phase 6)
+  session.py       # per-session history and state
+  ws.py            # WebSocket handler
+main.py            # app factory, static mounts
+```
+- [ ] Define the `AgentBackend` interface: `async def stream(session_id, text) -> AsyncIterator[AgentEvent]`
+- [ ] Implement `EchoAgent` so the behavior matches today; select it with `AGENT_BACKEND=echo` in `.env`
+- [ ] Split the WebSocket handler into a **receiver task** and a **pipeline task**, so `interrupt` can cancel transcription, agent work and TTS mid-flight
+- [x] Add `GET /health` on the main app that aggregates STT, TTS and agent health
+
+### 3c. Security (required before Hermes)
+- [ ] Add a shared-secret token (from `.env`), checked on WebSocket connect; the UI stores it after a one-time entry
+- [ ] Bind to the LAN interface or `127.0.0.1` behind your existing HTTPS proxy, not blindly to `0.0.0.0`
+- [ ] Limit the number of concurrent sessions and add a per-session rate limit
+
+**Done when:** the app behaves as it does today, but runs on the new protocol and the `EchoAgent`, and the backend tests pass.
+
+---
+
+## Phase 4: Artemis HUD (UI overhaul)
+
+Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital motif, so it has its own identity rather than copying Jarvis's blue and orange. Fonts are self-hosted in `static/fonts/` (no Google Fonts).
+
+- [ ] **Core orb** (Canvas 2D or WebGL) replaces the "A" button, with one look per state:
+  - [ ] idle: slow breathing glow
+  - [ ] listening: driven by the live mic level
+  - [ ] transcribing/thinking: rotating arc segments
+  - [ ] speaking: driven by the real TTS audio through an `AnalyserNode` (replaces the fake sine animation)
+- [ ] **Layout:** core in the center, transcript panel on one side, activity feed on the other; on phones, collapse to the core plus a swipe-up transcript
+- [ ] **Transcript:** streaming tokens, markdown and code rendering, timestamps, copy button
+- [ ] **Text input** box (Enter to send), for when you can't speak
+- [ ] **Activity feed:** tool cards (spinner → ✓ or ✗) from `agent.tool_*` events
+- [ ] **Approval cards** with Approve and Deny buttons, from `agent.approval_request`
+- [ ] **Status strip:** STT (B50) / TTS / Agent / Link health dots plus per-turn latency from `metrics`
+- [ ] **Interaction:** tap to toggle, **hold Space** for push-to-talk, Esc to interrupt
+- [ ] **Sound cues:** short local chimes (`static/sounds/`) when listening starts and stops
+- [ ] Mute toggle, settings drawer (voice, speed, input mode)
+- [ ] Boot sequence animation when it connects
+- [ ] Respect `prefers-reduced-motion`
+- [ ] Update `tests/frontend.test.js` for the new state machine
+
+**Done when:** a full conversation runs on the new HUD with `EchoAgent`, and fake tool and approval events (from a debug mode in `EchoAgent`) render correctly.
+
+---
+
+## Phase 5: Low-latency speech
+
+- [ ] **Sentence-chunked TTS:** buffer `agent.token` text, split it on sentence boundaries, and synthesize each sentence as soon as it's complete
+- [ ] Client-side **audio queue**: play `tts.chunk` frames in order with no gaps (Web Audio, not `new Audio()`)
+- [ ] **Barge-in:** pressing talk (or speaking, in Phase 7) while Artemis talks sends `interrupt` → the server cancels the agent and TTS, and the client flushes its queue
+- [ ] Measure and show time to first audio. Target: **under 1.5 s** after you stop speaking
+
+**Done when:** Artemis starts speaking its first sentence while the rest of the reply is still being generated, and you can cut it off.
+
+---
+
+## Phase 6: Hermes integration
+
+- [ ] Confirm how Hermes is exposed locally (OpenAI-compatible API, its own HTTP/WS gateway, or a Python API) and document it in `docs/hermes.md`
+- [ ] Implement `HermesAgent` in `artemis/agent/hermes.py`:
+  - [ ] Stream tokens → `agent.token`
+  - [ ] Map tool calls → `agent.tool_start` / `agent.tool_end`
+  - [ ] Map Hermes approval prompts → `agent.approval_request`, and send the user's answer back
+  - [ ] Map our `session_id` to the Hermes conversation/session id
+  - [ ] Handle cancellation on `interrupt`
+- [ ] Add a voice-oriented system prompt: short spoken answers; put code and long output in the transcript, not in speech
+- [ ] Strip markdown and code blocks from text before it goes to TTS
+- [ ] Switch with `AGENT_BACKEND=hermes`; keep `echo` for testing
+- [ ] Verify that Hermes points at a **local** LLM endpoint (self-contained rule)
+
+**Done when:** you can ask Artemis to do a task, watch the tool cards in the HUD, approve a risky action, and hear the result.
+
+---
+
+## Phase 7: Hands-free
+
+- [ ] **Voice activity detection:** Silero VAD (ONNX, local) stops recording automatically when you stop talking
+- [ ] **Hands-free mode:** after Artemis finishes speaking, listen again for a few seconds for a follow-up
+- [ ] **Wake word "Artemis":** openWakeWord with a custom-trained "Artemis" model, stored locally
+- [ ] Voice approvals ("approve" / "deny") for approval requests
+
+**Done when:** you can say "Artemis, …" across the room with no clicks.
+
+---
+
+## Phase 8: Operations
+
+- [ ] Run each service (STT, TTS, app) as a `systemd --user` unit with restart-on-failure, replacing the background jobs started by `start-artemis-voice.sh`
+- [ ] Rotate logs; use structured (JSON) logs that include the session id
+- [ ] Optional: keep transcript history in local SQLite, and add a "history" view in the HUD
+- [ ] Update the README to match the new architecture
+
+---
+
+## Service map (target)
+
+| Service | Port | Runs on | Model |
+|---|---|---|---|
+| App / WebSocket / UI | 8080 | CPU | — |
+| Whisper STT | 8083 | B50 (GPU.0) | whisper-large-v3-turbo (OpenVINO) |
+| TTS | 8084 | CPU (or B50) | Kokoro-82M ONNX (Piper fallback) |
+| Hermes agent | TBD | — | local LLM |
