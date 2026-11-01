@@ -209,6 +209,13 @@ Theme: **moonlight**. Silver, pale cyan and deep navy, with a crescent/orbital m
 
 ---
 
+## Phase 9: Voice and language
+
+- [x] Compare the available voices (15 female English + 3 Spanish, rendered side by side) and pick one: Heart for English
+- [x] Reply in the language the user spoke: Whisper auto-detect, a Spanish voice (Santa) chosen per sentence, Spanish hands-free phrases
+
+---
+
 ## Service map (target)
 
 | Service | Port | Runs on | Model |

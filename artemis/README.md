@@ -13,6 +13,7 @@ Python code shared by the three services. The voice app (`main.py`, in `venv/`) 
 | `session.py` | In-memory sessions (last 50). Unknown well-formed ids are adopted, so a conversation survives an app restart (Hermes holds the history) |
 | `speech.py` | `SentenceSplitter`: streamed agent text → speakable sentences, with markdown and code stripped. Lets TTS start before the reply is finished |
 | `vad.py` | Silero VAD (ONNX) and `SpeechSegmenter`: a continuous 16 kHz PCM stream → speech segments |
+| `language.py` | English/Spanish detection per sentence, to pick the reply voice; `fold()` strips accents for phrase matching |
 | `wake.py` | Wake word ("Artemis", fuzzy) and spoken approve/deny, matched on Whisper transcripts |
 | `handsfree.py` | Hands-free state machine: armed / listening / follow-up window, stop phrases, "new conversation" |
 | `agent/` | The brain behind Artemis: see [`agent/README.md`](agent/README.md) |

@@ -32,6 +32,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Protocol
 
+from artemis.language import fold
 from artemis.protocol import HandsFreeStatus
 from artemis.vad import SpeechSegment, SpeechSegmenter, VadConfig, VadStream, to_wav
 from artemis.wake import WAKE_WORD, match_approval, match_wake
@@ -40,34 +41,42 @@ logger = logging.getLogger("artemis.handsfree")
 
 # Whole-utterance stop phrases. Matched on the full transcript, so a sentence
 # of Artemis's own speech that merely contains "stop" doesn't count.
+# All phrase patterns are matched on fold(text): lowercase, no accents ("cállate" -> "callate").
 _STOP_COMMAND = re.compile(
-    r"^(?:(?:ok(?:ay)?|hey|no|please)\W+)*"
+    r"^\W*(?:(?:ok(?:ay)?|hey|no|please|oye|ya|ja|por favor)\W+)*"
     r"(stop|stop it|stop talking|stop that|stop please|please stop|cancel|quiet|be quiet|"
-    r"shut up|enough|that's enough|ok that's enough|never ?mind|hold on|wait)"
-    r"(?:\W+(?:please|now|artemis))*\W*$",
-    re.IGNORECASE,
+    r"shut up|enough|that's enough|ok that's enough|never ?mind|hold on|wait|"
+    r"para|parale|detente|alto|callate|silencio|basta|ya basta|cancela|cancelalo|"
+    r"espera|olvidalo|dejalo|suficiente|es suficiente|ya esta)"
+    r"(?:\W+(?:please|now|artemis|por favor|ya))*\W*$",
 )
 MAX_QUEUED_SEGMENTS = 4
 
 # What Whisper "hears" in near-silence or noise. Only filtered when no wake word
 # was needed (follow-up window); "Artemis, thank you" still goes through.
 # "Artemis, new conversation", "start over", "let's start fresh"...
+# "Artemis, nueva conversación", "empecemos de nuevo", "borra la conversación"...
 _NEW_CONVERSATION = re.compile(
-    r"^(?:(?:ok(?:ay)?|hey|please|let'?s|can we|could we|can you|could you)\W+)*"
+    r"^\W*(?:(?:ok(?:ay)?|hey|please|let'?s|can we|could we|can you|could you"
+    r"|oye|por favor|quiero|vamos a|podemos|puedes)\W+)*"
     r"(?:start\W+(?:a\W+)?(?:new|fresh)\W+(?:conversation|chat|session|topic)"
     r"|(?:a\W+)?new\W+(?:conversation|chat|session|topic)"
     r"|start\W+(?:over|fresh|from\W+scratch)|fresh\W+start"
-    r"|(?:reset|clear)\W+(?:the\W+|this\W+|our\W+)?(?:conversation|chat|session))"
-    r"(?:\W+(?:please|now|artemis))*\W*$",
-    re.IGNORECASE,
+    r"|(?:reset|clear)\W+(?:the\W+|this\W+|our\W+)?(?:conversation|chat|session)"
+    r"|(?:(?:inicia|iniciar|abre|abrir|empieza|empezar|comienza|comenzar|crea|crear)\W+)?(?:una?\W+)?"
+    r"(?:nueva\W+(?:conversacion|sesion)|nuevo\W+(?:chat|tema))"
+    r"|(?:empezar|empieza|empecemos|comenzar|comienza|comencemos)\W+(?:de\W+nuevo|desde\W+cero|otra\W+vez)"
+    r"|(?:reinicia|reiniciar|borra|borrar|limpia|limpiar)\W+(?:la\W+|esta\W+)?(?:conversacion|sesion|chat))"
+    r"(?:\W+(?:please|now|artemis|por favor))*\W*$",
 )
 
 # "Artemis, thanks" ends the conversation like a stop (only with the wake word).
-_THANKS = re.compile(r"^(thanks?|thank you)(?:\W+\w+)?\W*$", re.IGNORECASE)
+_THANKS = re.compile(r"^\W*(thanks?|thank you|gracias|muchas gracias)(?:\W+\w+)?\W*$")
 
 _HALLUCINATIONS = frozenset(
     {"thank you", "thanks", "thank you for watching", "thanks for watching", "you", "bye",
-     "okay", "ok", "so", "yeah", "hmm", "uh", "um"}
+     "okay", "ok", "so", "yeah", "hmm", "uh", "um",
+     "gracias", "muchas gracias", "gracias por ver", "gracias por ver el video", "adios"}
 )
 
 
@@ -191,7 +200,7 @@ class HandsFree:
 
         # A bare stop phrase works without the wake word while Artemis is busy
         # ("thanks" doesn't: Whisper hears it in silence and room noise).
-        busy_stop = busy and _STOP_COMMAND.match(text) is not None
+        busy_stop = busy and _STOP_COMMAND.match(fold(text)) is not None
         if wake is None and not busy_stop and not (listening and not busy):
             logger.debug("Ignored a %.1f s segment without the wake word", segment.seconds)
             return
@@ -200,12 +209,13 @@ class HandsFree:
         if wake is None and _normalized(command) in _HALLUCINATIONS and segment.seconds < 2.0 and not busy:
             logger.debug("Ignored a likely Whisper hallucination in the follow-up window")
             return
-        if _NEW_CONVERSATION.match(command):
+        phrase = fold(command)
+        if _NEW_CONVERSATION.match(phrase):
             logger.info("New conversation by voice")
             await self._host.new_session()
             await self._listen(self.config.listen_s, "new_session")  # ask right away, no wake word
             return
-        if _STOP_COMMAND.match(command) or (wake is not None and _THANKS.match(command)):
+        if _STOP_COMMAND.match(phrase) or (wake is not None and _THANKS.match(phrase)):
             # Never a question for the agent, even if Artemis just went quiet.
             logger.info("Stopped by voice")
             await self._host.interrupt_turn()
@@ -224,4 +234,4 @@ class HandsFree:
 
 
 def _normalized(text: str) -> str:
-    return " ".join(re.findall(r"[a-z']+", text.lower()))
+    return " ".join(re.findall(r"[a-z']+", fold(text)))

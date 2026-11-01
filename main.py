@@ -115,6 +115,7 @@ def create_app(
                 turns_per_minute=cfg.app.turns_per_minute,
                 vad=vad,
                 handsfree=handsfree,
+                spanish_voice=cfg.tts.voice_es,
             )
             logger.info("Agent backend: %s", agent.name)
             if not cfg.app.access_token:

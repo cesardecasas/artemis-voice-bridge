@@ -13,19 +13,24 @@ import re
 from dataclasses import dataclass
 from difflib import SequenceMatcher
 
+from artemis.language import fold
+
 WAKE_WORD = "artemis"
 
 # How Whisper tends to spell it when it mishears.
 _KNOWN_VARIANTS = frozenset(
     {"artemis", "artemus", "artimis", "artamis", "ardemis", "artemiss", "artemas", "artemies"}
 )
-_LEADING_FILLER = frozenset({"hey", "hi", "ok", "okay", "hello", "yo", "oh", "um", "uh"})
+_LEADING_FILLER = frozenset(
+    {"hey", "hi", "ok", "okay", "hello", "yo", "oh", "um", "uh", "oye", "hola", "eh", "ey", "bueno"}
+)
 _WORD = re.compile(r"[a-z0-9']+")
 _SIMILARITY = 0.8
 
 
 def _words(text: str) -> list[str]:
-    return _WORD.findall(text.lower())
+    """Lowercase words without accents ("¿Qué?" -> ["que"])."""
+    return _WORD.findall(fold(text))
 
 
 def _is_wake_word(word: str, wake_word: str) -> bool:
@@ -61,17 +66,24 @@ def match_wake(text: str, wake_word: str = WAKE_WORD) -> WakeMatch | None:
         return None
 
     # Cut the original text after the wake word, keeping the user's casing and punctuation.
+    # fold() keeps one character per character, so positions carry over.
+    folded = fold(text)
     position = 0
     for word in words[: index + 1]:
-        position = text.lower().index(word, position) + len(word)
+        position = folded.index(word, position) + len(word)
     command = text[position:].lstrip(" ,.!?;:-—").strip()
     return WakeMatch(command)
 
 
+# Matched on accent-free words, so "sí" is "si". Spanish after the English.
 _APPROVE = re.compile(
-    r"^(yes|yeah|yep|sure|ok|okay|approve[ds]?|approved|do it|go ahead|go for it|confirm(ed)?|proceed|run it)\b"
+    r"^(yes|yeah|yep|sure|ok|okay|approve[ds]?|approved|do it|go ahead|go for it|confirm(ed)?|proceed|run it"
+    r"|si|claro|vale|dale|adelante|siga|sigue|hazlo|apruebo|aprobado|confirmo|confirmado|de acuerdo|procede)\b"
 )
-_DENY = re.compile(r"^(no|nope|nah|deny|denied|don'?t|do not|cancel|stop|abort|reject(ed)?|never ?mind)\b")
+_DENY = re.compile(
+    r"^(no|nope|nah|deny|denied|don'?t|do not|cancel|stop|abort|reject(ed)?|never ?mind"
+    r"|niego|denegado|deniega|rechazo|rechazado|rechaza|cancela|cancelalo|para|detente|mejor no|olvidalo)\b"
+)
 
 
 def match_approval(text: str) -> bool | None:

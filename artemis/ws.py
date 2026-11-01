@@ -37,6 +37,7 @@ from artemis.protocol import (
     parse_client_message,
 )
 from artemis.handsfree import HandsFree, HandsFreeConfig
+from artemis.language import Language, detect_language
 from artemis.services import ServiceError
 from artemis.speech import SentenceSplitter
 from artemis.vad import VadModel
@@ -55,7 +56,11 @@ class Transcriber(Protocol):
 
 
 class Synthesizer(Protocol):
-    async def synthesize(self, text: str) -> bytes: ...
+    async def synthesize(
+        self, text: str, *, voice: str | None = None, lang: str | None = None
+    ) -> bytes:
+        """``voice``/``lang`` None = the TTS service's defaults (the English voice)."""
+        ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +78,8 @@ class VoiceDeps:
     vad: VadModel | None = None
     """Silero VAD for hands-free mode; None = hands-free unavailable."""
     handsfree: HandsFreeConfig = HandsFreeConfig()
+    spanish_voice: str = ""
+    """Kokoro voice for Spanish reply sentences; empty = every sentence uses the default voice."""
 
 
 def _ms_since(start: float) -> int:
@@ -87,13 +94,18 @@ class SpeechPipeline:
     So sentence 1 is playing on the client while sentence 2 is being
     synthesized and sentence 3 is still being generated.
 
+    Each sentence is spoken in the voice of its language (English / Spanish).
+    ``language`` is the starting guess (the user's language); unclear sentences
+    keep the previous sentence's language.
+
     If TTS fails, one ``tts_unavailable`` error is sent and the rest of the
     reply continues as text only.
     """
 
-    def __init__(self, conn: VoiceConnection, started: float) -> None:
+    def __init__(self, conn: VoiceConnection, started: float, language: Language = "en") -> None:
         self._conn = conn
         self._started = started
+        self._language: Language = language
         self._splitter = SentenceSplitter()
         self._queue: asyncio.Queue[str | None] = asyncio.Queue()
         self._input_done = False
@@ -129,7 +141,7 @@ class SpeechPipeline:
             if self.failed:
                 continue
             try:
-                wav = await self._conn.deps.tts.synthesize(sentence)
+                wav = await self._synthesize(sentence)
             except ServiceError as error:
                 self.failed = True
                 await self._conn.send_error("tts_unavailable", str(error))
@@ -146,6 +158,15 @@ class SpeechPipeline:
                 wav,
             )
             self._seq += 1
+
+    async def _synthesize(self, sentence: str) -> bytes:
+        spanish_voice = self._conn.deps.spanish_voice
+        if not spanish_voice:
+            return await self._conn.deps.tts.synthesize(sentence)
+        self._language = detect_language(sentence, default=self._language)
+        if self._language == "es":
+            return await self._conn.deps.tts.synthesize(sentence, voice=spanish_voice, lang="es")
+        return await self._conn.deps.tts.synthesize(sentence)
 
 
 class VoiceConnection:
@@ -537,7 +558,7 @@ class VoiceConnection:
             stage = "agent_error"
             await self.send_state("thinking")
             ctx = AgentContext(session=session, request_approval=self._request_approval)
-            speech = SpeechPipeline(self, started)
+            speech = SpeechPipeline(self, started, detect_language(text))
             reply = ""
             streamed = False
 

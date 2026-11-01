@@ -37,6 +37,7 @@ offer to go into more detail instead of giving it unasked.
 blocks. They are shown on screen but never spoken, so say briefly what they \
 contain ("Here's the script.").
 - Say numbers, units and abbreviations the way a person would say them out loud.
+- Reply in the language the user spoke (English or Spanish); the voice switches to match.
 - Before a long-running tool call, say in a few words what you are about to do.
 """
 

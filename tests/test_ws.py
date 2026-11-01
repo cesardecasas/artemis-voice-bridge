@@ -39,9 +39,15 @@ class FakeStt:
 class FakeTts:
     def __init__(self) -> None:
         self.calls: list[str] = []
+        self.voices: list[str | None] = []
+        self.langs: list[str | None] = []
 
-    async def synthesize(self, text: str) -> bytes:
+    async def synthesize(
+        self, text: str, *, voice: str | None = None, lang: str | None = None
+    ) -> bytes:
         self.calls.append(text)
+        self.voices.append(voice)
+        self.langs.append(lang)
         return WAV
 
 
@@ -76,6 +82,7 @@ def make_client(
     turns_per_minute: int = 30,
     max_connections: int = 4,
     vad: Any = None,
+    spanish_voice: str = "",
 ) -> TestClient:
     deps = VoiceDeps(
         stt=stt or FakeStt(),
@@ -86,6 +93,7 @@ def make_client(
         access_token=access_token,
         turns_per_minute=turns_per_minute,
         vad=vad,
+        spanish_voice=spanish_voice,
     )
     base = get_settings()
     settings = dataclasses.replace(
@@ -426,7 +434,9 @@ class GatedTts(FakeTts):
         super().__init__()
         self.cancelled = False
 
-    async def synthesize(self, text: str) -> bytes:
+    async def synthesize(
+        self, text: str, *, voice: str | None = None, lang: str | None = None
+    ) -> bytes:
         self.calls.append(text)
         if len(self.calls) == 1:
             return WAV
@@ -439,7 +449,9 @@ class GatedTts(FakeTts):
 
 
 class FailingTts(FakeTts):
-    async def synthesize(self, text: str) -> bytes:
+    async def synthesize(
+        self, text: str, *, voice: str | None = None, lang: str | None = None
+    ) -> bytes:
         self.calls.append(text)
         raise ServiceError("Speech service is offline", service="tts")
 
@@ -470,6 +482,44 @@ def test_speech_starts_before_the_reply_is_finished() -> None:
     metrics = next(f for f in frames if isinstance(f, dict) and f["type"] == "metrics")
     assert metrics["first_audio_ms"] is not None
     assert metrics["first_audio_ms"] < metrics["total_ms"]
+
+
+def spoken(user_text: str, sentences: list[str], spanish_voice: str = "em_santa") -> FakeTts:
+    tts = FakeTts()
+    agent = ScriptAgent(sentences, delay=0.0)
+    with make_client(tts=tts, agent=agent, spanish_voice=spanish_voice) as client, \
+            client.websocket_connect("/ws") as ws:
+        hello(ws)
+        ws.send_json({"type": "text.input", "text": user_text})
+        recv_until(ws)
+    return tts
+
+
+def test_spanish_reply_uses_the_spanish_voice() -> None:
+    tts = spoken("¿Qué hora es?", ["Son las ocho de la noche.", " ¿Quieres algo más?"])
+    assert tts.voices == ["em_santa", "em_santa"]
+    assert tts.langs == ["es", "es"]
+
+
+def test_english_reply_uses_the_default_voice() -> None:
+    tts = spoken("What time is it?", ["It's eight in the evening.", " Anything else?"])
+    assert tts.voices == [None, None]
+    assert tts.langs == [None, None]
+
+
+def test_voice_follows_each_sentence_and_unclear_ones_keep_the_last() -> None:
+    # Asked in Spanish; "OK." and "Docker 27." are unclear and stay Spanish.
+    tts = spoken(
+        "Oye, ¿cómo se dice esto en inglés?",
+        ["Claro, se dice de esta manera.", " Docker 27.", " Good evening, how are you?", " Docker 27."],
+    )
+    assert tts.calls[1] == "Docker 27."
+    assert tts.voices == ["em_santa", "em_santa", None, None]
+
+
+def test_no_spanish_voice_means_one_voice() -> None:
+    tts = spoken("¿Qué hora es?", ["Son las ocho de la noche."], spanish_voice="")
+    assert tts.voices == [None]
 
 
 def test_interrupt_stops_remaining_speech() -> None:

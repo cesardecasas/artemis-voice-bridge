@@ -111,6 +111,9 @@ def test_real_silero_ignores_silence_and_noise() -> None:
         ("OK, Artemus, play music", "play music"),
         ("Arthemis.", ""),
         ("artemis", ""),
+        ("Artemis, ¿qué hora es?", "¿qué hora es?"),
+        ("Oye Artemis, apaga las luces.", "apaga las luces."),
+        ("Hola, Artemis. ¿Cómo estás?", "¿Cómo estás?"),
     ],
 )
 def test_wake_word_matches(text: str, command: str) -> None:
@@ -134,7 +137,9 @@ def test_custom_wake_word() -> None:
 @pytest.mark.parametrize(
     ("text", "expected"),
     [("Approve.", True), ("Yes, go ahead", True), ("Artemis, deny", False), ("No.", False),
-     ("Cancel that", False), ("What does it do?", None)],
+     ("Cancel that", False), ("What does it do?", None),
+     ("Sí, adelante.", True), ("Artemis, hazlo", True), ("Vale.", True), ("No, mejor no.", False),
+     ("Cancélalo", False), ("Siga adelante.", True), ("¿Qué hace eso?", None)],
 )
 def test_spoken_approvals(text: str, expected: bool | None) -> None:
     assert match_approval(text) is expected
@@ -298,7 +303,8 @@ async def test_spoken_approval_resolves_the_pending_card() -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("phrase", ["Stop.", "stop", "Okay, stop.", "Please stop", "Stop talking.", "Enough.", "Be quiet!"])
+@pytest.mark.parametrize("phrase", ["Stop.", "stop", "Okay, stop.", "Please stop", "Stop talking.", "Enough.", "Be quiet!",
+     "Para.", "¡Cállate!", "Ya basta.", "Detente, por favor.", "Silencio.", "Oye, para", "Ja, basta!"])
 async def test_bare_stop_while_speaking_needs_no_wake_word(phrase: str) -> None:
     host = FakeHost([phrase])
     host.busy = True  # e.g. the browser is still playing a long reply
@@ -310,7 +316,8 @@ async def test_bare_stop_while_speaking_needs_no_wake_word(phrase: str) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("phrase", ["Thank you.", "Thanks.", "We should stop the launch now", "Don't stop."])
+@pytest.mark.parametrize("phrase", ["Thank you.", "Thanks.", "We should stop the launch now", "Don't stop.",
+     "Gracias.", "Para mañana necesito el informe.", "No pares."])
 async def test_not_a_bare_stop(phrase: str) -> None:
     host = FakeHost([phrase])
     host.busy = True
@@ -321,7 +328,7 @@ async def test_not_a_bare_stop(phrase: str) -> None:
 
 
 @pytest.mark.anyio
-@pytest.mark.parametrize("phrase", ["Artemis, stop.", "Artemis, thanks.", "Artemis, that's enough"])
+@pytest.mark.parametrize("phrase", ["Artemis, stop.", "Artemis, thanks.", "Artemis, that's enough", "Artemis, para.", "Artemis, gracias."])
 async def test_stop_with_wake_word_is_never_sent_to_the_agent(phrase: str) -> None:
     # The bug seen live: the reply was still playing but the server turn had
     # ended, so "Artemis, stop." became a new question ("Understood. Standing by.").
@@ -337,7 +344,9 @@ async def test_stop_with_wake_word_is_never_sent_to_the_agent(phrase: str) -> No
 @pytest.mark.parametrize(
     "phrase",
     ["Artemis, new conversation.", "Artemis, start a new conversation please", "Hey Artemis, let's start over.",
-     "Artemis, start fresh", "Artemis, new chat", "Artemis, reset the conversation."],
+     "Artemis, start fresh", "Artemis, new chat", "Artemis, reset the conversation.",
+     "Artemis, nueva conversación.", "Oye Artemis, empecemos de nuevo.", "Artemis, inicia una nueva conversación",
+     "Artemis, borra la conversación", "Artemis, nuevo chat, por favor"],
 )
 async def test_new_conversation_by_voice(phrase: str) -> None:
     host = FakeHost([phrase, "what's the weather?"])
@@ -353,7 +362,8 @@ async def test_new_conversation_by_voice(phrase: str) -> None:
 
 @pytest.mark.anyio
 @pytest.mark.parametrize(
-    "phrase", ["New conversation.", "Artemis, tell me about the new conversation feature", "Artemis, start over the download"]
+    "phrase", ["New conversation.", "Artemis, tell me about the new conversation feature", "Artemis, start over the download",
+               "Nueva conversación.", "Artemis, ¿qué es una nueva conversación?"]
 )
 async def test_not_a_new_conversation(phrase: str) -> None:
     host = FakeHost([phrase])

@@ -117,6 +117,8 @@ class TtsSettings:
     speed: float
     lang: str
     max_chars: int
+    voice_es: str
+    """Voice for Spanish replies (pronounced with ``es``); empty = English voice only."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -173,7 +175,8 @@ def get_settings() -> Settings:
         ),
         device=_str("ARTEMIS_STT_DEVICE", "GPU.0"),
         max_audio_bytes=max_audio_bytes,
-        language=_str("ARTEMIS_STT_LANGUAGE", "en"),
+        # Auto-detect by default, so English and Spanish both work.
+        language=_str("ARTEMIS_STT_LANGUAGE", "").strip(),
         initial_prompt=_str(
             "ARTEMIS_STT_INITIAL_PROMPT",
             # Keep this to a short list of names: full sentences leak into the
@@ -195,6 +198,7 @@ def get_settings() -> Settings:
         speed=_float("ARTEMIS_TTS_SPEED", 1.0),
         lang=_str("ARTEMIS_TTS_LANG", "en-us"),
         max_chars=_int("ARTEMIS_TTS_MAX_CHARS", 2000),
+        voice_es=_str("ARTEMIS_TTS_VOICE_ES", "em_santa").strip(),
     )
 
     app = AppSettings(

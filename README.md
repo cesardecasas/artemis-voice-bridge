@@ -121,9 +121,10 @@ All settings live in `.env` and are read by [`artemis/config.py`](artemis/config
 | `ARTEMIS_MAX_CONNECTIONS` | `4` | Simultaneous WebSocket connections |
 | `ARTEMIS_TURNS_PER_MINUTE` | `30` | Per-connection turn limit |
 | `ARTEMIS_STT_DEVICE` | `GPU.0` | OpenVINO device for Whisper |
-| `ARTEMIS_STT_LANGUAGE` | `en` | Whisper language; empty = auto-detect |
+| `ARTEMIS_STT_LANGUAGE` | *(empty = auto-detect)* | Whisper language. Auto-detect lets you speak English or Spanish; `en` = English only |
 | `ARTEMIS_STT_INITIAL_PROMPT` | `Artemis, Hermes.` | Names Whisper should expect (see below) |
 | `ARTEMIS_TTS_VOICE` | `af_heart` | Artemis's voice (list: `GET :8084/voices`) |
+| `ARTEMIS_TTS_VOICE_ES` | `em_santa` | Voice for Spanish replies; empty = one voice for everything |
 | `ARTEMIS_TTS_SPEED` | `1.0` | Speaking rate (0.5–2.0) |
 | `ARTEMIS_MAX_AUDIO_BYTES` | `20971520` | Max size of one recording |
 | `ARTEMIS_AGENT_BACKEND` | `echo` | `echo` (placeholder) or `hermes` (see [`docs/hermes.md`](docs/hermes.md)) |
@@ -197,7 +198,7 @@ The core's color tells you what Artemis is doing: **green** standing by, **cyan*
 |---|---|
 | `GET :8080/health` | `ready` or `degraded`, the STT/TTS service status, agent backend status, session/connection counts, whether auth is on |
 | `GET :8083/health` | Whisper status, model, device |
-| `GET :8084/health` | Kokoro status, model, default voice |
+| `GET :8084/health` | Kokoro status, model, default voice, Spanish voice |
 | `GET :8084/voices` | All available voice IDs |
 
 ### Choosing a voice
@@ -208,6 +209,22 @@ venv-tts/bin/python test_tts.py --voice bf_emma --out /tmp/emma.wav   # listen, 
 ```
 
 Then set `ARTEMIS_TTS_VOICE` in `.env` and restart.
+
+### English and Spanish
+
+Speak either language and Artemis answers in it. Whisper auto-detects the
+language (`ARTEMIS_STT_LANGUAGE` empty), Hermes is asked to reply in the
+user's language, and every reply sentence is checked (`artemis/language.py`):
+Spanish sentences are read by `ARTEMIS_TTS_VOICE_ES` (default `em_santa`) with
+Spanish pronunciation, English ones by `ARTEMIS_TTS_VOICE`. Sentences that
+could be either ("OK.", "Docker 27.") keep the previous sentence's voice.
+
+Hands-free understands Spanish too: "Artemis, ¿qué hora es?", "oye Artemis…",
+stop phrases ("para, por favor", "basta", "cállate", "silencio", "detente"),
+"Artemis, nueva conversación" / "empecemos de nuevo", approvals ("sí,
+adelante" / "no, mejor no") and "Artemis, gracias". A one-word "para" is
+sometimes misheard ("Bye-bye") because language detection has little to go
+on; "para, por favor" or "basta" are reliable.
 
 ---
 
@@ -337,6 +354,18 @@ npm test            # frontend tests only
 ---
 
 ## Changelog
+
+### 1.11.0: English and Spanish
+
+- **Bilingual replies:** speak English or Spanish and Artemis answers in the same language, in a matching voice. Spanish sentences use **Santa** (`em_santa`, Spanish pronunciation), English ones keep **Heart** (`af_heart`). The voice is chosen per sentence, and unclear sentences keep the previous voice, so a reply doesn't flip mid-way.
+- Whisper now **auto-detects** the language (`ARTEMIS_STT_LANGUAGE` defaults to empty). Set `en` to go back to English only.
+- New `ARTEMIS_TTS_VOICE_ES` (default `em_santa`; empty turns it off). The TTS service accepts a per-request `lang`, warms up both voices, checks both exist at startup, logs the voice and language of each sentence, and reports `voice_es` in `/health`.
+- The Hermes voice instructions ask for replies in the user's language.
+- **Hands-free in Spanish:** "oye/hola Artemis", stop phrases (para, basta, ya basta, cállate, silencio, detente, espera, olvídalo...), "nueva conversación", "empecemos de nuevo", "borra la conversación", approvals (sí, adelante, hazlo, vale / no, mejor no, cancélalo) and "Artemis, gracias". Matching ignores accents, so "callate" and "cállate" both work.
+- New `artemis/language.py`: a small English/Spanish detector (stdlib only).
+- Voice comparison: all 15 female English voices plus the 3 Spanish ones were rendered and compared; Heart stays for English, Santa was chosen for Spanish.
+- Verified live through Caddy and Hermes in hands-free mode with simulated speech: a Spanish question was answered in Spanish by Santa, an English one by Heart, and "Artemis, nueva conversación" started a new session. Whisper transcribed Spanish and English sample sentences correctly with auto-detect.
+- Tests: 170 backend (50 new: language detection, voice per sentence, Spanish phrases), 30 frontend.
 
 ### 1.10.0: Operations (Phase 8 of `PLAN.md`)
 

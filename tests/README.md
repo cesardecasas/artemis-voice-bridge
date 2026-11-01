@@ -14,6 +14,7 @@ npm test                                # frontend
 | `test_handsfree.py` | VAD segmenter (fake and real Silero), wake-word and approval matching, and the hands-free state machine (follow-ups, stop phrases, new conversation) |
 | `test_speech.py` | `SentenceSplitter`: abbreviations, decimals, code fences, markdown |
 | `test_logs.py` | JSON/text log format, session id via `log_context`, uvicorn routing |
+| `test_language.py` | English/Spanish detection and accent folding used to pick the reply voice |
 | `frontend.test.js` | Frontend modules in Node with a mock DOM: core state, playback queue, approvals, hands-free signals, new conversation |
 
 ## Notes

@@ -119,9 +119,19 @@ class TtsClient(_LocalService):
     label = "Speech"
 
     def _detail(self, payload: dict[str, object]) -> str:
-        return f"Kokoro · {payload.get('voice', '?')}"
+        detail = f"Kokoro · {payload.get('voice', '?')}"
+        if payload.get("voice_es"):
+            detail += f" · es {payload['voice_es']}"
+        return detail
 
-    async def synthesize(self, text: str) -> bytes:
-        """Render ``text`` to 16-bit mono WAV bytes."""
-        response = await self._post("/synthesize", json={"text": text})
+    async def synthesize(
+        self, text: str, *, voice: str | None = None, lang: str | None = None
+    ) -> bytes:
+        """Render ``text`` to 16-bit mono WAV bytes (service defaults when None)."""
+        body: dict[str, str] = {"text": text}
+        if voice:
+            body["voice"] = voice
+        if lang:
+            body["lang"] = lang
+        response = await self._post("/synthesize", json=body)
         return response.content

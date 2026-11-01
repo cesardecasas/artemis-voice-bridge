@@ -36,18 +36,22 @@ logger = logging.getLogger("artemis-tts")
 settings = get_settings().tts
 
 WARMUP_TEXT = "Artemis online."
+WARMUP_TEXT_ES = "Artemis en línea."
 
 
 class SynthesizeRequest(BaseModel):
     text: str = Field(min_length=1)
     voice: str | None = None
     speed: float | None = Field(default=None, ge=0.5, le=2.0)
+    lang: str | None = Field(default=None, pattern=r"^[a-z]{2,3}(-[a-z]{2})?$")
+    """Pronunciation (``en-us``, ``en-gb``, ``es``...); None = ``ARTEMIS_TTS_LANG``."""
 
 
 class HealthResponse(BaseModel):
     status: Literal["ready", "loading"]
     model: str
     voice: str
+    voice_es: str
     device: str
 
 
@@ -75,10 +79,9 @@ class _Engine:
         self.kokoro = Kokoro(str(settings.model_path), str(settings.voices_path))
         self.voices = frozenset(self.kokoro.get_voices())
 
-        if settings.voice not in self.voices:
-            raise ValueError(
-                f"Configured voice {settings.voice!r} not found in voice pack"
-            )
+        for name, voice in (("ARTEMIS_TTS_VOICE", settings.voice), ("ARTEMIS_TTS_VOICE_ES", settings.voice_es)):
+            if voice and voice not in self.voices:
+                raise ValueError(f"{name}={voice!r} not found in voice pack")
 
         logger.info(
             "Kokoro loaded in %.2fs (%d voices, default %s)",
@@ -87,23 +90,25 @@ class _Engine:
             settings.voice,
         )
 
-    def synthesize(self, text: str, voice: str, speed: float) -> bytes:
+    def synthesize(self, text: str, voice: str, speed: float, lang: str) -> bytes:
         if self.kokoro is None:
             raise RuntimeError("TTS model not loaded")
 
         started = time.perf_counter()
         samples: NDArray[np.float32]
         samples, sample_rate = self.kokoro.create(
-            text, voice=voice, speed=speed, lang=settings.lang
+            text, voice=voice, speed=speed, lang=lang
         )
         elapsed = time.perf_counter() - started
         duration = len(samples) / sample_rate if sample_rate else 0.0
 
         logger.info(
-            "Synthesized %.2fs of audio in %.2fs (RTF %.2f)",
+            "Synthesized %.2fs of audio in %.2fs (RTF %.2f, %s/%s)",
             duration,
             elapsed,
             elapsed / duration if duration else 0.0,
+            voice,
+            lang,
         )
 
         buffer = io.BytesIO()
@@ -121,8 +126,12 @@ async def lifespan(_: FastAPI) -> AsyncIterator[None]:
 
     # Warm up so the first real reply is not slowed by lazy initialization.
     await asyncio.to_thread(
-        engine.synthesize, WARMUP_TEXT, settings.voice, settings.speed
+        engine.synthesize, WARMUP_TEXT, settings.voice, settings.speed, settings.lang
     )
+    if settings.voice_es:
+        await asyncio.to_thread(
+            engine.synthesize, WARMUP_TEXT_ES, settings.voice_es, settings.speed, "es"
+        )
     logger.info("TTS service ready")
 
     yield
@@ -139,6 +148,7 @@ async def health() -> HealthResponse:
         status="ready" if engine.kokoro is not None else "loading",
         model=settings.model_path.name,
         voice=settings.voice,
+        voice_es=settings.voice_es,
         device="CPU",
     )
 
@@ -171,10 +181,11 @@ async def synthesize(request: SynthesizeRequest) -> Response:
         raise HTTPException(status_code=400, detail=f"Unknown voice {voice!r}")
 
     speed = request.speed if request.speed is not None else settings.speed
+    lang = request.lang or settings.lang
 
     try:
         async with engine.lock:
-            wav = await asyncio.to_thread(engine.synthesize, text, voice, speed)
+            wav = await asyncio.to_thread(engine.synthesize, text, voice, speed, lang)
     except Exception as error:
         logger.exception("Synthesis failed")
         raise HTTPException(status_code=500, detail="Synthesis failed") from error
